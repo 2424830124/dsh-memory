@@ -6,15 +6,14 @@
   "type": "module",
   "exports": {
     ".": "./index.js",
-    "./client": "./client.js",
+    "./client": "./ui/client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
-    "client.js",
-    "client.*.js",
+    "ui/*.js",
     "lib/*.js",
     "cordis.patch.yml",
     "locale/*.json",

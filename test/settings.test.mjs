@@ -355,8 +355,8 @@ try {
   })
 
   await check('路由常量与客户端调用的一致', async () => {
-    const client = await readFile(join(import.meta.dirname, '..', 'client.js'), 'utf8')
-    assert.ok(client.includes(SETTINGS_ROUTE), `client.js 应调用 ${SETTINGS_ROUTE}`)
+    const client = await readFile(join(import.meta.dirname, '..', 'ui', 'client.js'), 'utf8')
+    assert.ok(client.includes(SETTINGS_ROUTE), `ui/client.js 应调用 ${SETTINGS_ROUTE}`)
   })
 } finally {
   await rm(root, { recursive: true, force: true })

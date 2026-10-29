@@ -63,10 +63,10 @@ node test/dump.mjs
 | `lib/config-schema.js` | 配置项的单一事实来源 | `CONFIG_FIELDS` `CONFIG_FIELD_BY_KEY` `defaultSettings` `readField` `formatScalar` |
 | `lib/config.js` | 配置文件读写（就地改行、保留注释） | `CONFIG_FILE_NAME` `loadConfigFile` `saveConfigValue` |
 | `lib/settings-route.js` | 设置面板的 HTTP 端点 | `SETTINGS_ROUTE` `createSettingsHandler` |
-| `client.js` | 浏览器侧「记忆」标签页：装配、i18n、样式、状态与 effect | 模块工厂，注册进 `conversation.view` |
-| `client.settings.js` | 设置表单渲染（chunk） | `renderSettings` |
-| `client.browse.js` | 左栏列表渲染（chunk） | `renderBrowser` |
-| `client.file.js` | 右栏详情与标题卡渲染（chunk） | `renderFile` |
+| `ui/client.js` | 浏览器侧「记忆」标签页：装配、i18n、样式、状态与 effect | 模块工厂，注册进 `conversation.view` |
+| `ui/client.settings.js` | 设置表单渲染（chunk） | `renderSettings` |
+| `ui/client.browse.js` | 左栏列表渲染（chunk） | `renderBrowser` |
+| `ui/client.file.js` | 右栏详情与标题卡渲染（chunk） | `renderFile` |
 
 `lib/store.js` 只是门面，三块互不认识：`cache.js` 不认识文件系统事件，`watch.js` 不认识 YAML，`writer.js` 不认识监听。它们之间用 `cache.onLoaded` 回调挂钩，所以 cache 不用 import watcher，也就没有循环依赖。
 
@@ -173,7 +173,7 @@ node test/dump.mjs
 
 ## 11. 面板与 chunk 契约
 
-`client.js` 主包 ~2100 行（状态、effect、i18n、样式、跨区 helper），三个 `client.*.js` 是 chunk，由主包用 `require.async()` 按需加载。**文件名必须匹配宿主的 `client.*.js` 正则**，且与 `client.js` 同目录。
+`ui/client.js` 主包 ~2100 行（状态、effect、i18n、样式、跨区 helper），三个 `ui/client.*.js` 是 chunk，由主包用 `require.async()` 按需加载。**chunk 文件名必须匹配宿主的 `client.*.js` 正则，且与 `ui/client.js` 同目录**——宿主按「bundle 所在目录 + 文件名」读盘。整组放 `ui/` 只是为了让包根目录只剩 `index.js` 一个服务端入口；宿主那边的 URL 形状不变（恒为 `/plugins/<id>/client.js`，与 `clientPath` 无关），所以搬目录不影响加载。
 
 - chunk 里**只有**"拿 props 返回 vnode"的纯函数：没有 hooks、没有 state、不 import 彼此的辅助函数。样式常量、`t`、全部 state 与 setter、以及跨区共用的工厂（`placeholder` / `chips` / `spawnAdd` / `saveFile` …）都由主包当 props 传下去。状态只有一份，chunk 只负责画。
 - 用 `useState` + `useEffect` 加载 chunk，不用 `React.lazy`：不依赖宿主有没有包 Suspense 边界。没加载完之前右栏是 skeleton、左栏和设置表单显示"加载中"。
@@ -205,7 +205,7 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 
 ## 13. 配置
 
-`lib/config-schema.js` 的 `CONFIG_FIELDS` 是**唯一事实来源**，同时喂给三处：`index.js` 的 Schemastery `Config`、设置路由的校验、`client.js` 的控件。加一个配置项只有两步——`CONFIG_FIELDS` 加一条，`client.js` 的 `DICTIONARIES` 补 `field.<key>` / `hint.<key>` 两句文案。
+`lib/config-schema.js` 的 `CONFIG_FIELDS` 是**唯一事实来源**，同时喂给三处：`index.js` 的 Schemastery `Config`、设置路由的校验、`ui/client.js` 的控件。加一个配置项只有两步——`CONFIG_FIELDS` 加一条，`ui/client.js` 的 `DICTIONARIES` 补 `field.<key>` / `hint.<key>` 两句文案。
 
 优先级：`config.yaml` > profile 插件配置 > 内置默认值。合并前只挑字段表认识的键（手写的旧键不会把整份配置带崩），合并后再用同一份 schema 校验一次，不合法就 warning + 默认值。
 
@@ -230,10 +230,10 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 
 - **改文本文件只能用 read / edit / write 工具。** 别用 PowerShell 的 `Get-Content -Raw | Set-Content -Encoding UTF8`：它会把 UTF-8 当 GBK 解码，整份文件变乱码（本项目真被这个毁过一次）。用 Node 脚本做行区间手术是安全的（`readFileSync(...,'utf8')` → `writeFileSync(...,'utf8')`），但仍要跑 `node --check` 并复读。
 - **别给"测试正在等"的定时器加 `unref()`。** `unref()` 让事件循环不再等它，顶层 `await` 就永远不 settle，Node 判定进程无事可做直接退出（`test/store.test.mjs` 的文件监听用例真被这个打挂过）。`watch.js` 的防抖定时器**不能** unref；`runtime.js` 的午夜切天与快照清扫不参与测试等待，可以 unref。
-- 仓库没有 `.git`，所以没有别的副本；`.backup/` 里是几个历史快照。
+- 仓库有 git（`origin` = github.com/2424830124/dsh-memory），历史都在提交里；`.backup/` 是加 git 之前留的临时备份，已经清掉。
 - 中文文案统一用中文全角标点；报错要告诉模型"哪一份、哪个标题、为什么"，不要只说"失败"。
 - 新增行为优先补测试（五份 suite 是唯一自动验证）；`test/live.mjs` 只在真实宿主里跑。
-- `locale/zh.json` / `locale/en.json` 是插件的元信息（面板外），面板内的文案在 `client.js` 的 `DICTIONARIES`。
+- `locale/zh.json` / `locale/en.json` 是插件的元信息（面板外），面板内的文案在 `ui/client.js` 的 `DICTIONARIES`。
 
 ## 16. 文档
 
