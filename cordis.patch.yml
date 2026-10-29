@@ -1,0 +1,16 @@
+# dsh-memory bundle patch.
+#
+# One Host row. The plugin registers a prompt section plus the memory_read,
+# memory_edit and memory_manage tools, and keeps sessions in sync about changes
+# made elsewhere.
+#
+# This file only mounts the plugin. Its settings live next to the data they
+# describe, so a broken edit here can never take the plugin down:
+#
+#   ~/.dsh/dsh-memory/config.yaml         plugin configuration
+#   ~/.dsh/dsh-memory/.memory/*.yaml      Global memory files
+#   ~/.dsh/dsh-memory/state/sessions/     per-session delivery snapshots
+#   <workspace>/.memory/*.yaml            Workspace memory files
+- insert:
+    - id: memory
+      name: '@huai_xin/dsh-memory'

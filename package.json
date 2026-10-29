@@ -1,0 +1,64 @@
+{
+  "name": "@huai_xin/dsh-memory",
+  "version": "0.1.0",
+  "description": "Cross-session long-term memory for DeepSeek Harness: YAML memory notebooks injected into the prompt, read and edited by the model, and kept in sync across sessions.",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "client.*.js",
+    "lib/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "docs/*.md",
+    "AGENTS.md",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "plugin",
+    "memory",
+    "long-term-memory",
+    "prompt-injection",
+    "yaml"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2424830124/dsh-memory.git"
+  },
+  "homepage": "https://github.com/2424830124/dsh-memory#readme",
+  "bugs": {
+    "url": "https://github.com/2424830124/dsh-memory/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs",
+    "test:live": "node test/live.mjs",
+    "dump": "node test/dump.mjs"
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# this repo doubles as a workspace, so the plugin writes real memory here
+.memory/
+
+# local edits / history kept out of the published tree
+.backup/
+
+# pnpm is only used incidentally by the host profile
+pnpm-lock.yaml
+
+# packaging leftovers
+*.tgz

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Long-Term Memory",
+    "description": "YAML memory notebooks injected into the prompt and shared across sessions, with read/edit/manage tools and change notices."
+  }
+}
