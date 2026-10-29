@@ -92,6 +92,7 @@ node test/dump.mjs
 - 那句英文是为了解决人称错位：记忆用「我」的口吻写，提示词其余部分是英文第二人称。
 - `format` 不注入（只进 `memory_edit` 的描述）。
 - `inject_ignore` 生效：`t3` 忽略整棵三级子树，`desc` 忽略所有正文，`t2.desc` 只忽略二级的正文。唯一判断点是 `render.js` 的 `isSuppressed()`。
+- **一份文件渲染出来一个字符都没有，就整个文件不出现**（连文件头）。典型情形是一级标题全关（`t1`），但判断只认「渲染结果为空」，不要去数 `inject_ignore` 里有没有 `t1`——文件里根本没有标题时同样跳过。**只影响注入这一路**——`renderRead()` 和 `memory_edit` 描述里的 `renderFormats()` 照旧列着它，否则模型就改不了那份被排除在提示词之外的文件了。
 - 顺序：全部全局文件 → 全部工作区文件，段内按 `localeCompare(…, 'zh')`；`fileOrder` 把列出的按给定先后排在前面。`overview()` 与 `injectedDocuments()` 共用 `orderByConfig()`，所以面板列表的顺序**就是**注入顺序。
 - 一个文件都没有时返回空串，不注入空块。
 

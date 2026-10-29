@@ -415,7 +415,12 @@ await check('两天一起读：一份头部，日期之间用 --- 隔开', async
 await check('日志默认不进提示词，打开 injectLog 后新会话才带上', async () => {
   const { home, store, runtime, agent } = await runtimeSandbox()
   const today = formatLogDate()
-  await store.write(store.globalDir, 'Global', createDocument({ fileName: '我的记忆', desc: '关于用户' }))
+  // 有正文的记忆文件才进注入：只剩文件头的文件整份跳过，所以这里得挂一个标题。
+  await store.write(
+    store.globalDir,
+    'Global',
+    parseDocument('meta_data:\n  file_name: 我的记忆\n  desc: 关于用户\n  scope: Global\ndata:\n  关于用户:\n    desc: 喜欢喝乌龙\n'),
+  )
   await runtime.read(agent, { fileName: today })
   await runtime.edit(agent, { fileName: today, path: [today, '09:10 早上'], newString: '吃了面' })
 

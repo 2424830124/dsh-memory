@@ -10,7 +10,7 @@ import { DocumentError } from '../lib/errors.js'
 import { createDocument } from '../lib/model.js'
 import { normalizeHeadingPath } from '../lib/path.js'
 import { renderNotice } from '../lib/notice.js'
-import { renderInjection, renderRead } from '../lib/render.js'
+import { renderFormats, renderInjection, renderRead } from '../lib/render.js'
 import { diffEntries, diffSections, headingHashes } from '../lib/snapshot.js'
 import { normalizeBody } from '../lib/text.js'
 import { findNode } from '../lib/tree.js'
@@ -291,6 +291,26 @@ check('t3 忽略整棵三级子树', () => {
   const text = renderInjection([doc])
   assert.doesNotMatch(text, /yyyy-mm-dd/)
   assert.match(text, /我们之间的互动/)
+})
+check('什么都不注入的文件连文件头都不出现', () => {
+  // 一级标题全关 = 整份文件不进提示词。
+  const off = parseDocument(SAMPLE.replace('    - keyword', '    - keyword\n    - t1'))
+  assert.equal(renderInjection([off]), '')
+
+  // 一个标题都没有的文件同理：以前会剩下一个只有 file_name / desc 的空壳头。
+  const blank = createDocument({ fileName: '还没写的', desc: '说明', injectIgnore: [] })
+  assert.equal(renderInjection([blank]), '')
+
+  // 旁边还有别的文件时，只有它自己消失。
+  const keep = parseDocument('meta_data:\n  file_name: 留着的\n  desc: 说明\n  scope: Global\ndata:\n  一个标题:\n    desc: 正文\n')
+  const text = renderInjection([off, keep])
+  assert.doesNotMatch(text, new RegExp(off.fileName))
+  assert.match(text, /file_name: 留着的/)
+
+  // 但 format 是「怎么改这份文件」的说明，跳过注入不影响它。
+  assert.match(renderFormats([off]), new RegExp(off.fileName))
+  // 读取也不受影响：全文照旧。
+  assert.match(renderRead(off), new RegExp(off.fileName))
 })
 check('读取忽略 inject_ignore 并带上 update_at', () => {
   const doc = parseDocument(SAMPLE)
