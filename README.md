@@ -202,3 +202,8 @@ data:
 `docs/` 下是形状参照，不参与运行：[记忆文件格式](docs/记忆文件格式.md)、[日志文件格式](docs/日志文件格式.md)、[通用返回格式](docs/通用返回格式.md)、[日志返回格式](docs/日志返回格式.md)。
 
 开发、架构与改动指南见 [AGENTS.md](./AGENTS.md)。
+
+## 许可
+
+MIT，见 [LICENSE](./LICENSE)。
+
