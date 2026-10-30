@@ -164,13 +164,6 @@ export function apply(ctx, config) {
     config: { ...settings, workingDirectory: () => ctx.get('workingDirectory') },
     logger: { warn },
   })
-  runtime.setAgentSource(() => {
-    try {
-      return ctx.get('agents')?.list() ?? []
-    } catch {
-      return []
-    }
-  })
 
   ctx.effect(() => {
     store.onChange(({ directory }) => {
@@ -266,6 +259,22 @@ export function apply(ctx, config) {
       warn(`memory: 无法为会话 ${String(agent?.id)} 冻结编辑工具描述 ${error?.message ?? error}`)
     }
   }
+
+  ctx.effect(() => ctx.on('agent/status', ({ agent, status }) => {
+    if (agent === undefined || (status !== 'idle' && status !== 'running')) return
+    try {
+      runtime.setAgentRunning(agent, status === 'running')
+    } catch (error) {
+      warn(`memory: 更新会话 ${String(agent?.id)} 通知调度状态失败 ${error?.message ?? error}`)
+    }
+  }), 'memory.agentStatus()')
+
+  ctx.effect(() => ctx.on('agent/inbox/inserted', ({ agent, message }) => {
+    if (agent === undefined) return
+    runtime.onUserMessage(agent, message).catch((error) => {
+      warn(`memory: 用户消息触发会话 ${String(agent?.id)} 记忆检查失败 ${error?.message ?? error}`)
+    })
+  }), 'memory.inboxInserted()')
 
   ctx.effect(() => ctx.on('agent/disposed', ({ agent }) => {
     try {

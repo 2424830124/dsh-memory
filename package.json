@@ -1,6 +1,6 @@
 {
   "name": "@huai_xin/dsh-memory",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Cross-session long-term memory for DeepSeek Harness: YAML memory notebooks injected into the prompt, read and edited by the model, and kept in sync across sessions.",
   "license": "MIT",
   "type": "module",
@@ -44,7 +44,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs",
+    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/notification-scheduler.test.mjs",
     "test:live": "node test/live.mjs",
     "dump": "node test/dump.mjs"
   },

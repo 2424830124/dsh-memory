@@ -23,6 +23,7 @@ import {
 } from '../lib/log.js'
 import { createDocument } from '../lib/model.js'
 import { parseDocument, serializeDocument } from '../lib/document.js'
+import { selectLogInjection } from '../lib/log-injection.js'
 import { MemoryRuntime } from '../lib/runtime.js'
 import { MemoryStore } from '../lib/store.js'
 import { editTool } from '../lib/tools.js'
@@ -44,10 +45,8 @@ async function check(name, fn) {
  * The injected memory block is frozen per session, so anything that asserts what
  * the prompt *would* say now needs a session that has not frozen a copy already.
  */
-function freshAgent(id, runtime) {
-  const agent = { id, session: { header: {} }, injected: [], inject(message) { this.injected.push(message) } }
-  runtime.setAgentSource(() => [agent])
-  return agent
+function freshAgent(id) {
+  return { id, session: { header: {} }, injected: [], inject(message) { this.injected.push(message) } }
 }
 
 /** One empty log for a fixed date. */
@@ -69,6 +68,33 @@ async function sandbox() {
 }
 
 console.log('log')
+
+await check('注入日志策略过滤空日并复用升序输入', () => {
+  const filled = (date, body) => {
+    const document = logOf(date)
+    document.roots.set(date, {
+      update_at: '',
+      desc: '',
+      keyword: [],
+      children: new Map([[`09:00 ${body}`, { update_at: '', desc: body, keyword: [], children: new Map() }]]),
+    })
+    return { directory: 'global', document }
+  }
+  const files = [
+    filled('2026-10-01', 'oldest'),
+    { directory: 'global', document: logOf('2026-10-25') },
+    filled('2026-10-26', 'middle'),
+    filled('2026-10-27', 'newest'),
+  ]
+  const selected = selectLogInjection(files, { days: 2, detailDays: 1 })
+  assert.deepEqual(selected.map(({ document }) => document.fileName), ['2026-10-26', '2026-10-27'])
+  assert.deepEqual(selected.map(({ detail }) => detail), [false, true])
+  assert.equal(selectLogInjection(files, { days: 0, detailDays: 2 }).length, 0)
+  assert.deepEqual(
+    selectLogInjection(files, { days: 5, detailDays: -1 }).map(({ detail }) => detail),
+    [false, false, false],
+  )
+})
 
 await check('日期只认真实存在的 YYYY-MM-DD', () => {
   assert.equal(isLogDate('2026-10-27'), true)
@@ -310,7 +336,6 @@ async function runtimeSandbox() {
     logger: { warn: (message) => console.log(`       warn: ${message}`) },
   })
   const agent = { id: 'a1', session: { header: {} }, injected: [], inject(message) { this.injected.push(message) } }
-  runtime.setAgentSource(() => [agent])
   await runtime.start()
   await runtime.attach(agent)
   return { home, store, runtime, agent }
@@ -437,7 +462,7 @@ await check('日志默认不进提示词，打开 injectLog 后新会话才带�
   runtime.config.injectLog = true
   assert.equal(runtime.sectionText({ agent }), injected, '老会话的注入文本不随配置变')
 
-  const fresh = freshAgent('a2', runtime)
+  const fresh = freshAgent('a2')
   const withLog = runtime.sectionText({ agent: fresh })
   assert.match(withLog, new RegExp(today))
   assert.match(withLog, /## 09:10 早上/)
@@ -445,7 +470,7 @@ await check('日志默认不进提示词，打开 injectLog 后新会话才带�
 
   // 摘要注入时原样照搬：长度在上游（logSummaryMaxChars）就卡住了，这里不再截一次。
   await runtime.edit(agent, { fileName: today, path: [today, '09:11 写了一很长的摘要'], newString: 'x' })
-  const newest = freshAgent('a3', runtime)
+  const newest = freshAgent('a3')
   assert.match(runtime.sectionText({ agent: newest }), /## 09:11 写了一很长的摘要/)
 })
 
@@ -488,7 +513,6 @@ await check('注入只取各作用域最新的几天，最新的带正文、更�
     logger: { warn: (message) => console.log(`       warn: ${message}`) },
   })
   const agent = { id: 'a1', session: { header: {} }, injected: [], inject(message) { this.injected.push(message) } }
-  runtime.setAgentSource(() => [agent])
   await runtime.start()
   await runtime.attach(agent)
 
@@ -560,15 +584,26 @@ await check('注入只取各作用域最新的几天，最新的带正文、更�
   runtime.config.logInjectGlobalDays = 2
   runtime.config.logInjectGlobalDetailDays = 2
   runtime.config.logInjectWorkspaceDays = 0
-  const narrowed = runtime.sectionText({ agent: freshAgent('a4', runtime) })
+  const narrowed = runtime.sectionText({ agent: freshAgent('a4') })
   assert.doesNotMatch(narrowed, /2026-10-01/, '全局只留两天')
   assert.match(narrowed, /正文 G3/, '两天都带正文')
   assert.doesNotMatch(narrowed, /W3/, '工作区那两天被关掉了')
 
+  // A day with no entry must not consume the configured window. The chosen
+  // days must still follow their date order after the empty one is filtered out.
+  const emptyDay = { ...dayOf('2026-10-25', 'Global', 'EMPTY'), roots: new Map() }
+  await store.write(store.globalDir, 'Global', emptyDay)
+  runtime.config.logInjectGlobalDays = 3
+  const afterEmpty = runtime.sectionText({ agent: freshAgent('a-empty') })
+  assert.doesNotMatch(afterEmpty, /2026-10-25/)
+  assert.match(afterEmpty, /2026-10-01/)
+  assert.match(afterEmpty, /2026-10-26/)
+  assert.match(afterEmpty, /2026-10-27/)
+
   // detailDays larger than days is clamped rather than reaching past the list.
   runtime.config.logInjectGlobalDays = 1
   runtime.config.logInjectGlobalDetailDays = 5
-  assert.match(runtime.sectionText({ agent: freshAgent('a5', runtime) }), /正文 G4/)
+  assert.match(runtime.sectionText({ agent: freshAgent('a5') }), /正文 G4/)
 
   // 快照是 fire-and-forget 写的，拆除目录前要等它落完，否则它会重建 sessions/。
   await runtime.flush()

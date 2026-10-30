@@ -58,8 +58,6 @@ function runtimeFor(store, workspace, extra = {}) {
     },
     logger: { warn: (message) => console.log(`       warn: ${message}`) },
   })
-  runtime.setAgentSource(() => runtime.tracked)
-  runtime.tracked = []
   return runtime
 }
 
@@ -120,6 +118,25 @@ await check('面板概览：全局列得出来，工作区跟着会话走', asyn
   assert.ok(!after[0].files.some((entry) => entry.fileName === '2026-10-27'), '日志不混进文件列表')
   const logText = await runtime.fileText({ scope: 'Global', fileName: '2026-10-27', kind: 'log' })
   assert.match(logText?.text ?? '', /2026-10-27/, '日志也能按 kind=log 取到渲染文本')
+  runtime.stop()
+})
+
+await check('面板创建与删除整份记忆文件', async () => {
+  const { store, workspace } = await sandbox()
+  const runtime = runtimeFor(store, workspace)
+
+  const created = await runtime.createFile({ scope: 'Global', fileName: '面板新建' })
+  assert.equal(created.fileName, '面板新建')
+  assert.deepEqual(created.tree, [])
+  assert.deepEqual(store.documents(store.globalDir).map((entry) => entry.fileName), ['面板新建'])
+
+  const removed = await runtime.deleteFile({ scope: 'Global', fileName: '面板新建' })
+  assert.deepEqual(removed, { fileName: '面板新建', scope: 'Global', kind: 'memory' })
+  assert.deepEqual(store.documents(store.globalDir), [])
+  await assert.rejects(
+    () => runtime.deleteFile({ scope: 'Global', fileName: '面板新建' }),
+    /找不到记忆文件/,
+  )
   runtime.stop()
 })
 
@@ -419,7 +436,6 @@ await check('新会话不收到更新提醒，直接以当前内容为基线', a
   })
   const runtime = runtimeFor(store, workspace)
   const fresh = fakeAgent('n1', workspace)
-  runtime.tracked = [fresh]
   await runtime.attach(fresh)
 
   assert.equal(fresh.injected.length, 0, '刚开的会话不该收到任何更新提醒')
@@ -430,17 +446,31 @@ await check('新会话不收到更新提醒，直接以当前内容为基线', a
 
   // 之后同一份内容不再变化，重新接入也不该提醒。
   const again = fakeAgent('n1', workspace)
-  runtime.tracked = [again]
   await runtime.attach(again)
   assert.equal(again.injected.length, 0)
 })
 
-await check('通知一投递就推进快照，丢弃才回滚', async () => {
+await check('新会话的坏文件提示也延迟到真实用户边界', async () => {
+  const { store, workspace } = await sandbox()
+  await writeFile(join(store.globalDir, 'broken.yaml'), 'meta_data:\n  file_name: 坏的\ndata:\n  desc: 不行\n', 'utf8')
+  await store.reloadDirectory(store.globalDir, 'Global')
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('broken-boundary', workspace)
+  await runtime.attach(agent)
+  assert.equal(agent.injected.length, 0, 'attach 不立即发坏文件提示')
+
+  await runtime.onUserMessage(agent, { role: 'user', source: { kind: 'user' } })
+  assert.equal(agent.injected.length, 1)
+  assert.match(agent.injected[0].content[0].text, /memory_broken/)
+  await runtime.onUserMessage(agent, { role: 'user', source: { kind: 'user' } })
+  assert.equal(agent.injected.length, 1, '相同坏文件签名只提示一次')
+})
+
+await check('按会话通知检查点推进快照，丢弃才回滚', async () => {
   const { store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace)
   const writer = fakeAgent('w1', workspace)
   const watcher = fakeAgent('w2', workspace)
-  runtime.tracked = [writer, watcher]
   await runtime.attach(writer)
   await runtime.attach(watcher)
 
@@ -449,15 +479,19 @@ await check('通知一投递就推进快照，丢弃才回滚', async () => {
     roots: new Map([['主题', { update_at: '', desc: 'v1', keyword: [], children: new Map() }]]),
   })
   await runtime.afterWrite(writer, store.globalDir)
+  assert.equal(watcher.injected.length, 0, '保存只登记变更，不立即推送')
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
   assert.equal(watcher.injected.length, 1)
 
   // 还没被取走就再写一次同样的内容：已经在快照里，不该重复提醒。
   await runtime.afterWrite(writer, store.globalDir)
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
   assert.equal(watcher.injected.length, 1, '同一版本不该重复提醒')
 
-  // 通知被丢弃：回滚到投递前的基线，下次变更重新提醒。
+  // 通知被丢弃：回滚到投递前的基线，下次用户边界重新检查并补发。
   await runtime.release(watcher)
   await runtime.afterWrite(writer, store.globalDir)
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
   assert.equal(watcher.injected.length, 2, '丢弃的通知要能在下次补发')
 })
 
@@ -492,7 +526,6 @@ await check('另一会话的修改以 user 消息投递且不唤醒', async () =
   const runtime = runtimeFor(store, workspace)
   const writer = fakeAgent('w1', workspace)
   const watcher = fakeAgent('w2', workspace)
-  runtime.tracked = [writer, watcher]
   await runtime.attach(writer)
   await runtime.attach(watcher)
 
@@ -501,13 +534,22 @@ await check('另一会话的修改以 user 消息投递且不唤醒', async () =
     roots: new Map([['主题', { update_at: '', desc: '原文', keyword: [], children: new Map() }]]),
   })
   await runtime.afterWrite(writer, store.globalDir, {})
+  await store.write(store.globalDir, 'Global', {
+    fileName: '第二份', desc: '', format: '', scope: 'Global', injectIgnore: [], source: '',
+    roots: new Map([['补充', { update_at: '', desc: '第二次保存', keyword: [], children: new Map() }]]),
+  })
+  await runtime.afterWrite(writer, store.globalDir, {})
+  assert.equal(watcher.injected.length, 0, '多次保存只登记，不立即推送')
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
 
-  assert.equal(watcher.injected.length, 1)
+  assert.equal(watcher.injected.length, 1, '多次保存合并为一条通知')
   const message = watcher.injected[0]
   assert.equal(message.role, 'user')
   assert.equal(message.source.kind, 'memory')
   assert.ok(message.source.snapshot)
   assert.match(message.content[0].text, /<memory_update>/)
+  assert.match(message.content[0].text, /记忆/)
+  assert.match(message.content[0].text, /第二份/)
   assert.equal(writer.injected.length, 0)
 })
 
@@ -516,7 +558,6 @@ await check('取走通知不改变已推进的快照，版本变化才再提醒'
   const runtime = runtimeFor(store, workspace)
   const writer = fakeAgent('w1', workspace)
   const watcher = fakeAgent('w2', workspace)
-  runtime.tracked = [writer, watcher]
   await runtime.attach(writer)
   await runtime.attach(watcher)
 
@@ -525,10 +566,12 @@ await check('取走通知不改变已推进的快照，版本变化才再提醒'
     roots: new Map([['主题', { update_at: '', desc: 'v1', keyword: [], children: new Map() }]]),
   })
   await runtime.afterWrite(writer, store.globalDir, {})
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
   assert.equal(watcher.injected.length, 1)
 
   await runtime.claim(watcher, watcher.injected[0].source.snapshot)
   await runtime.afterWrite(writer, store.globalDir, {})
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
   assert.equal(watcher.injected.length, 1, '版本未变不应重复通知')
 
   await store.write(store.globalDir, 'Global', {
@@ -536,6 +579,7 @@ await check('取走通知不改变已推进的快照，版本变化才再提醒'
     roots: new Map([['主题', { update_at: '', desc: 'v2', keyword: [], children: new Map() }]]),
   })
   await runtime.afterWrite(writer, store.globalDir, {})
+  await runtime.onUserMessage(watcher, { role: 'user', source: { kind: 'user' } })
   assert.equal(watcher.injected.length, 2, '版本变化应再次通知')
 })
 
@@ -543,7 +587,6 @@ await check('旧版本的快照被整份忽略，不会被当成“全都变了�
   const { home, store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace)
   const watcher = fakeAgent('w8', workspace)
-  runtime.tracked = [watcher]
   await runtime.attach(watcher)
 
   await store.write(store.globalDir, 'Global', {
@@ -570,7 +613,6 @@ await check('重启后从磁盘快照算出遗漏的变更', async () => {
   const { home, store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace)
   const watcher = fakeAgent('w9', workspace)
-  runtime.tracked = [watcher]
   await runtime.attach(watcher)
 
   await store.write(store.globalDir, 'Global', {
@@ -590,8 +632,9 @@ await check('重启后从磁盘快照算出遗漏的变更', async () => {
   await restarted.ensureDirectory(restarted.globalDir, 'Global')
   const nextRuntime = runtimeFor(restarted, workspace)
   const resumed = fakeAgent('w9', workspace)
-  nextRuntime.tracked = [resumed]
   await nextRuntime.attach(resumed)
+  assert.equal(resumed.injected.length, 0, '恢复时不立即投递')
+  await nextRuntime.onUserMessage(resumed, { role: 'user', source: { kind: 'user' } })
   assert.equal(resumed.injected.length, 1)
   assert.match(resumed.injected[0].content[0].text, /别的会话更新/)
 })
@@ -606,7 +649,6 @@ await check('注入文本对会话冻结：文件改了也不换，变化只走�
 
   const runtime = runtimeFor(store, workspace)
   const agent = fakeAgent('f1', workspace)
-  runtime.tracked = [agent]
   await runtime.attach(agent)
   const frozen = runtime.sectionText({ agent })
   assert.match(frozen, /第一版/)
@@ -620,7 +662,6 @@ await check('注入文本对会话冻结：文件改了也不换，变化只走�
 
   // 只有新会话才重新渲染：它本来就没有前缀可保护。
   const fresh = fakeAgent('f2', workspace)
-  runtime.tracked = [agent, fresh]
   await runtime.attach(fresh)
   assert.match(runtime.sectionText({ agent: fresh }), /第三版/, '新会话看到的是当前内容')
 })
@@ -633,7 +674,6 @@ await check('分叉复制父会话的快照，父快照没了就按当前状态�
   })
   const runtime = runtimeFor(store, workspace)
   const parent = fakeAgent('p1', workspace)
-  runtime.tracked = [parent]
   await runtime.attach(parent)
 
   // Pin the parent's frozen parts by hand: the real paths that set them are
@@ -646,7 +686,6 @@ await check('分叉复制父会话的快照，父快照没了就按当前状态�
 
   const child = fakeAgent('c1', workspace)
   child.session.header.parentSession = 'p1'
-  runtime.tracked = [parent, child]
   await runtime.attach(child)
   assert.equal(child.injected.length, 0, '继承的基线里没有新东西，不该提醒')
   assert.equal(runtime.sectionText({ agent: child }), parentText, '子会话共享父会话的前缀')
@@ -657,7 +696,6 @@ await check('分叉复制父会话的快照，父快照没了就按当前状态�
   await removeSnapshot(store.stateDir, 'p1')
   const orphan = fakeAgent('c2', workspace)
   orphan.session.header.parentSession = 'p1'
-  runtime.tracked = [parent, child, orphan]
   await runtime.attach(orphan)
   assert.equal(orphan.injected.length, 0)
   assert.match(runtime.sectionText({ agent: orphan }), /分叉前的内容/)
@@ -667,7 +705,6 @@ await check('超过保留窗口的快照被丢掉，下次接入时重建', asyn
   const { store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace, { snapshotTtlMinutes: 60 })
   const agent = fakeAgent('t1', workspace)
-  runtime.tracked = [agent]
   await runtime.attach(agent)
 
   const { isStale, readSnapshot, writeSnapshot } = await import('../lib/snapshot.js')
@@ -682,7 +719,6 @@ await check('超过保留窗口的快照被丢掉，下次接入时重建', asyn
   assert.equal(isStale({ updatedAt: old }, 0), false, '0 表示一直留着')
 
   const again = fakeAgent('t1', workspace)
-  runtime.tracked = [again]
   await runtime.attach(again)
   assert.equal(again.injected.length, 0, '过期重建不算"被删"，不该提醒')
 
@@ -697,7 +733,6 @@ await check('闲过头的会话下次组装时重新渲染注入文本', async (
   const { store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace, { snapshotTtlMinutes: 60 })
   const agent = fakeAgent('t2', workspace)
-  runtime.tracked = [agent]
   await store.write(store.globalDir, 'Global', {
     fileName: '要注入的',
     desc: '关于用户的事',
@@ -727,7 +762,6 @@ await check('edit 要求先 read，且在读取后被改动时拒绝', async () 
   const { store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace)
   const agent = fakeAgent('e1', workspace)
-  runtime.tracked = [agent]
   await runtime.attach(agent)
 
   await store.write(store.globalDir, 'Global', {
@@ -754,7 +788,6 @@ await check('同名文件按 scope 分别读写，清单也按 scope 收窄', as
   const { store, workspace } = await sandbox()
   const runtime = runtimeFor(store, workspace)
   const agent = fakeAgent('s1', workspace)
-  runtime.tracked = [agent]
   await runtime.attach(agent)
 
   const document = (desc, scope) => ({
@@ -878,7 +911,6 @@ await check('改的那份在磁盘上被删掉时报错，不静默重建', asyn
   const written = await store.write(store.globalDir, 'Global', filled('要删的', new Map([['主题', node('原文')]])))
   const runtime = runtimeFor(store, workspace)
   const agent = fakeAgent('gone', workspace)
-  runtime.tracked = [agent]
   await runtime.attach(agent)
 
   // Reach in the way another process would: the file the caller is holding is

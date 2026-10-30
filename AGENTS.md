@@ -4,7 +4,7 @@
 
 ## 1. 这是什么
 
-DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文件（标题树），插件把它注入提示词、给模型三个工具读写、并在别的会话改动后发一条不唤醒的通知。另有一份按天分文件的**日志**（短期记忆）。
+DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文件（标题树），插件把它注入提示词，给模型三个工具读写，并按会话活动状态合并检查别的会话改动后发不唤醒通知。另有一份按天分文件的**日志**（短期记忆）。
 
 - 做：提示词注入、读写工具、跨会话通知、按日日志、设置面板。
 - 不做：自动召回、删除记忆目录、跨层级移动章节、删除日志。
@@ -19,8 +19,8 @@ DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文
 ## 2. 跑起来
 
 ```bash
-# 五份离线测试，不需要宿主（这是主要的验证手段）
-node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs
+# 六份离线测试，不需要宿主（这是主要的验证手段）
+node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/notification-scheduler.test.mjs
 
 # 需要在真实宿主里跑：逐条验证三个工具的成功与错误路径
 node test/live.mjs
@@ -35,12 +35,16 @@ node test/dump.mjs
 
 ## 3. 分层与模块
 
-依赖单向：`tools → runtime → store/snapshot/notice/render/edit → document/model/tree → text/path`。`errors` 谁都能 import，它谁也不 import。底层不 import 上层。
+依赖单向：`tools → runtime → notification-scheduler/panel-service/store/snapshot/notice/render/edit → document/model/tree → text/path`；共享的 `file-order` 与纯策略 `log-injection` 不依赖 runtime。`notification-scheduler` 只负责活动状态、变更版本与检查节奏，通过回调委托快照比较/通知；`panel-service` 通过显式回调使用 runtime 的会话目录解析和通知能力，不反向 import runtime。`errors` 谁都能 import，它谁也不 import。底层不 import 上层。
 
 | 模块 | 职责 | 对外 |
 | --- | --- | --- |
 | `index.js` | 入口：读配置、挂 hook、注册工具 | `name` `inject` `Config` `apply` |
-| `lib/runtime.js` | 协调：可见范围、注入文本、投递、通知、数据访问、快照生命周期 | `MemoryRuntime` |
+| `lib/runtime.js` | 协调：可见范围、注入文本、投递、通知、工具数据访问、快照生命周期；面板 API 委托给 panel service | `MemoryRuntime` |
+| `lib/panel-service.js` | 浏览器面板文件用例：概览、定位、渲染、编辑、创建与删除；通过显式回调接收会话目录解析和通知能力 | `MemoryPanelService` |
+| `lib/file-order.js` | 统一提示词注入和面板列表共用的文件排序策略 | `orderByConfig` |
+| `lib/log-injection.js` | 纯日志注入选择策略：空日过滤、最近天数窗口、详细日选择 | `selectLogInjection` |
+| `lib/notification-scheduler.js` | 跨会话通知检查节奏：目录 revision、活动 agent、空闲用户边界与共享轮询器 | `MemoryNotificationScheduler` `NOTIFICATION_POLL_MS` |
 | `lib/tools.js` | 三个工具的定义与参数校验 | `TOOL_NAMES` `readTool` `editTool` `manageTool` `renderEditDescription` |
 | `lib/store.js` | 磁盘门面，把 cache/watch/writer 拼起来 | `MemoryStore` |
 | `lib/cache.js` | 目录加载、缓存索引、按文件名定位 | `MemoryCache` `FILE_EXTENSION` `logRelative` `isLogRelative` |
@@ -80,7 +84,7 @@ node test/dump.mjs
 6. **序列化往返稳定**：`serializeDocument` → `parseDocument` 必须得到同一份文档；空字段不写进文件。
 7. **正文开头不能是 `#`**（会被读成标题行）；中间和后面几行可以。日志的 `old_string` / `new_string` 同理，只在开头这一条上拒绝。
 8. **错误绝不外抛**：注入组装、agent 创建、工具管线里的异常都可能毁掉无关请求。每个 hook 都包住，最坏降级成空注入 / `return []` / 一条 warning。
-9. **通知只在"这个会话还没被告知过"时发**，唯一实现点是 `MemoryRuntime.notifyAgent()`。
+9. **通知只在这个会话有未告知的变化时发**；何时检查由 `MemoryNotificationScheduler` 决定，唯一的 diff/通知实现点仍是 `MemoryRuntime.notifyAgent()`。
 10. **面板不另做一套渲染**：「原文」和「注入效果」都走 `runtime.fileText()`，跟 `memory_read` / `renderInjection` 同源。
 
 ## 5. 提示词注入
@@ -114,7 +118,7 @@ node test/dump.mjs
 | --- | --- | --- |
 | `injected` | 提示词里那段记忆就注入这份文本 | 冻结，只有过期重建时重算 |
 | `tools` | `memory_edit` 的工具描述 | 冻结，同上 |
-| `files` | 检测"哪几个标题变了" | 每次文件更新都推进 |
+| `files` | 检测“哪几个标题变了” | 调度器触发该会话的 diff 检查后推进 |
 
 - **为什么冻结前两份**：它们都在请求最前面，改一个字符就切断供应商的前缀缓存。文件一改就重渲染，等于每次编辑都把该会话的缓存作废——而它本来已经看过那批文件了。变化改走通知。
 - **`tools` 怎么按会话冻结**：全局注册的 `memory_edit` 描述是 getter，每次装配重算（列着每个文件的 format）。`index.js` 的 `freezeEditTool()` 在 `agent/created` 里用 `agent.ctx.tools.register()` 注册**同名副本**，描述换成冻结文本——宿主工具层按"自己的层覆盖全局层"解析同名工具。子 agent 不做这件事（它的 `memory_edit` 刚被 `tools.restrict` 拒掉，再注册会绕回去）。
@@ -129,8 +133,11 @@ node test/dump.mjs
 ## 7. 投递与通知
 
 - `agent.inject(message)` 塞进收件箱，**不唤醒** agent。消息 `source` 带 `{ kind: 'memory', snapshot }`。
-- 入队即记为"已推进"（`delivered` + `inFlight`），闲置很久的会话不会重复收同一批变化。
-- 被丢弃（`agent/inbox/discarded`）→ `release()` 把基线退回去，下次还会通知。
+- 写入/外部变化只增加目录 revision，不立即逐次通知；`lib/notification-scheduler.js` 合并尚未检查的目录变更。
+- 空闲会话仅在收到 `role: 'user'` 且 `source.kind: 'user'` 的真实用户消息时检查；memory 通知本身不触发检查。
+- 运行中的会话由共享的 5 秒 interval 轮询——轮询间隔本身就是限流，最多每 5 秒一条提醒；**没有额外的"变更满 5 秒才查"门槛**。模型结束（`agent/turn-stopping`）不立即检查；若结束前没赶上轮询，留待下一条真实用户消息检查。
+- 检查完并入队即记为"已推进"（`delivered` + `inFlight`），空闲很久的会话不会重复收同一批变化；多个已积累文件变化合成一次 diff/通知。
+- 被丢弃（`agent/inbox/discarded`）→ `release()` 把基线退回去，并释放对应检查 revision，下次边界可重新通知。
 - 被消费（`agent/inbox/claimed`）→ `claim()` 落实快照并用新状态重算。
 - 文案：`<memory_update>` + 一行说明 + 每条变化一行；五种说法 `added` / `updated` / `removed` / `renamed`（带原路径）/ `file`（元数据、更新时间或同级顺序变了）/ `deleted`（整份文件没了）。列表为空时**什么都不发**（`renderNotice()` 返回 `undefined`）。
 - 文件解析失败另发 `<memory_broken>`，同一签名只发一次；坏文件不参与"被删了"的比对。
@@ -217,7 +224,7 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 - **加标题层级**：改 `lib/model.js` 的 `LEVELS`（`MAX_DEPTH`、`RESERVED_KEYS`、`inject_ignore` 合法值全跟着走；`renderNode` 用 `depth` 递归，不用改）。
 - **加标题字段**（比如 `tag`）：`ASPECTS` 加一项 → `model.js` 读取校验 → `document.js` 读写 → `render.js` 一段渲染。`inject_ignore` 合法值自动扩展。
 - **换存储**：只动 `store.js`（含 `cache.js` / `watch.js` / `writer.js`）和 `paths.js`。
-- **换通知策略**：`runtime.js` 的通知都汇到 `notifyAgent()`，比对在 `describeChanges()`，文案在 `notice.js`。
+- **换通知策略**：检查节奏改 `lib/notification-scheduler.js`；快照 diff 仍在 `runtime.js` 的 `describeChanges()`，唯一通知/delivery 实现点为 `notifyAgent()`，文案在 `notice.js`。
 - **加工具**：`defineTool()` 已含参数校验、agent 检查、错误包装、`presentCall`，新工具只写 `name/description/properties/run/present`。
 - **改日志形状**：`log.js` 的 `LOG_MAX_DEPTH` / `parseLogEntryTitle` / `assertLogTitle` 是全部形状规则；`isLogDate()` 是唯一日期判定点，`parseLogDateQuery()` 是唯一日期查询解析点。
 
@@ -233,7 +240,7 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 - **别给"测试正在等"的定时器加 `unref()`。** `unref()` 让事件循环不再等它，顶层 `await` 就永远不 settle，Node 判定进程无事可做直接退出（`test/store.test.mjs` 的文件监听用例真被这个打挂过）。`watch.js` 的防抖定时器**不能** unref；`runtime.js` 的午夜切天与快照清扫不参与测试等待，可以 unref。
 - 仓库有 git（`origin` = github.com/2424830124/dsh-memory），历史都在提交里；`.backup/` 是加 git 之前留的临时备份，已经清掉。
 - 中文文案统一用中文全角标点；报错要告诉模型"哪一份、哪个标题、为什么"，不要只说"失败"。
-- 新增行为优先补测试（五份 suite 是唯一自动验证）；`test/live.mjs` 只在真实宿主里跑。
+- 新增行为优先补测试（六份离线 suite 是主要自动验证）；`test/live.mjs` 只在真实宿主里跑。
 - `locale/zh.json` / `locale/en.json` 是插件的元信息（面板外），面板内的文案在 `ui/client.js` 的 `DICTIONARIES`。
 
 ## 16. 文档
