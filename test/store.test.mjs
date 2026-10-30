@@ -9,10 +9,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { CONFIG_FILE_NAME, loadConfigFile } from '../lib/config.js'
+import { parseDocument } from '../lib/document.js'
 import { resolveLayout } from '../lib/paths.js'
 import { MemoryStore } from '../lib/store.js'
 import { MemoryRuntime } from '../lib/runtime.js'
 import { renderInjection } from '../lib/render.js'
+import { manageTool } from '../lib/tools.js'
 
 const failures = []
 async function check(name, fn) {
@@ -233,6 +235,24 @@ await check('面板改名：文件名和标题都能改，旧文件不留在磁�
   await assert.rejects(
     () => runtime.patchFile({ scope: 'Global', fileName: '新名字', newFileName: '占位' }),
     /已经有一个叫/,
+  )
+
+  // 日期形式的文件名留给日志：模型工具这么拒绝，面板也得拒绝，否则两边规则不一致。
+  await assert.rejects(
+    () => runtime.patchFile({ scope: 'Global', fileName: '新名字', newFileName: '2026-10-27' }),
+    /是日期形式/,
+  )
+
+  // 解析失败的文件同样占着这个名字，改名不能把它覆盖掉。
+  await writeFile(
+    join(store.globalDir, '坏掉的.yaml'),
+    'meta_data:\n  file_name: 坏掉的\ndata:\n  标题: 正文\n  - 甲\n',
+    'utf8',
+  )
+  await store.reloadDirectory(store.globalDir, 'Global')
+  await assert.rejects(
+    () => runtime.patchFile({ scope: 'Global', fileName: '新名字', newFileName: '坏掉的' }),
+    /已经有一个叫 坏掉的/,
   )
 })
 
@@ -928,6 +948,169 @@ await check('改的那份在磁盘上被删掉时报错，不静默重建', asyn
   )
   const left = await readdir(store.globalDir)
   assert.deepEqual(left.filter((name) => name.endsWith('.yaml')), [], '不该凭空多出一份')
+
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('memory_manage 用 new_file_name 改名，旧文件不留在磁盘上', async () => {
+  const { store, workspace } = await sandbox()
+  await store.write(store.globalDir, 'Global', filled('旧名', new Map([['主题', node('正文')]])))
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('rename', workspace)
+  await runtime.attach(agent)
+
+  const result = await runtime.manage(agent, { scope: 'Global', fileName: '旧名', newFileName: '新名', desc: '改过的描述' })
+  assert.equal(result.fileName, '新名')
+  assert.equal(result.renamedFrom, '旧名')
+  const renamed = await runtime.read(agent, { scope: 'Global', fileName: '新名' })
+  assert.match(renamed, /改过的描述/)
+  assert.match(renamed, /正文/, '改名不该顺手清掉标题')
+
+  const names = (await readdir(store.globalDir)).filter((name) => name.endsWith('.yaml'))
+  assert.deepEqual(names, ['新名.yaml'], '旧文件必须删掉，否则会同时存在两份')
+  await assert.rejects(() => runtime.read(agent, { scope: 'Global', fileName: '旧名' }), /找不到记忆文件/)
+
+  // 新名字被占用时拒绝，而不是让两份文件共用一个 file_name。
+  await store.write(store.globalDir, 'Global', filled('占位', new Map()))
+  await assert.rejects(
+    () => runtime.manage(agent, { scope: 'Global', fileName: '新名', newFileName: '占位' }),
+    /已经有一个叫 占位/,
+  )
+  assert.match(await runtime.read(agent, { scope: 'Global', fileName: '新名' }), /改过的描述/, '拒绝后原文件不动')
+
+  // 解析失败的文件同样算「被占用」：改名不能把一份手写坏的 YAML 悄悄覆盖掉。
+  await writeFile(
+    join(store.globalDir, '坏掉的.yaml'),
+    'meta_data:\n  file_name: 坏掉的\ndata:\n  标题: 正文\n  - 甲\n',
+    'utf8',
+  )
+  await store.reloadDirectory(store.globalDir, 'Global')
+  await assert.rejects(
+    () => runtime.manage(agent, { scope: 'Global', fileName: '新名', newFileName: '坏掉的' }),
+    /已经有一个叫 坏掉的/,
+  )
+  assert.match(await readFile(join(store.globalDir, '坏掉的.yaml'), 'utf8'), /file_name: 坏掉的/, '坏文件原样留着')
+
+
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('memory_manage 把 new_file_name 传空串就删掉整份文件', async () => {
+  const { store, workspace } = await sandbox()
+  await store.write(store.globalDir, 'Global', filled('要删的', new Map([['主题', node('正文')]])))
+  await store.write(store.globalDir, 'Global', filled('留下的', new Map()))
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('delete', workspace)
+  await runtime.attach(agent)
+
+  const result = await runtime.manage(agent, { scope: 'Global', fileName: '要删的', newFileName: '' })
+  assert.equal(result.deleted, true)
+  const left = (await readdir(store.globalDir)).filter((name) => name.endsWith('.yaml'))
+  assert.deepEqual(left, ['留下的.yaml'])
+  await assert.rejects(() => runtime.read(agent, { scope: 'Global', fileName: '要删的' }), /找不到记忆文件/)
+  assert.doesNotMatch(await runtime.read(agent, { scope: 'Global' }), /要删的/)
+
+  // 日志不能这样删：它由插件按日期管理。
+  await assert.rejects(
+    () => runtime.manage(agent, { scope: 'Global', fileName: '2026-10-27', newFileName: '' }),
+    /日志文件的元数据由插件管理/,
+  )
+
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('只差大小写的改名不会把文件删掉', async () => {
+  const { store, workspace } = await sandbox()
+  await store.write(store.globalDir, 'Global', filled('abc', new Map([['主题', node('正文')]])))
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('case', workspace)
+  await runtime.attach(agent)
+
+  const result = await runtime.manage(agent, { scope: 'Global', fileName: 'abc', newFileName: 'ABC' })
+  assert.equal(result.fileName, 'ABC')
+  // 大小写不敏感的文件系统上，写新名字就是覆盖同一个文件；再按旧路径删一次会把
+  // 刚写进去的那份删掉，磁盘上一个文件都不剩。大小写敏感的文件系统上则是两份
+  // 不同文件，旧的那份必须删。两种情形结果都该只剩新名字这一份。
+  const names = (await readdir(store.globalDir)).filter((name) => name.endsWith('.yaml'))
+  assert.deepEqual(names, ['ABC.yaml'])
+  assert.match(await runtime.read(agent, { scope: 'Global', fileName: 'ABC' }), /正文/)
+  // 缓存里也不能留着旧名字的空壳，否则清单里会出现两个同名文件。
+  assert.deepEqual(
+    store.documents(store.globalDir).map((entry) => entry.fileName),
+    ['ABC'],
+  )
+
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('空的新文件名会穿过工具层传到运行时（删除不是「没给参数」）', async () => {
+  let captured
+  const tool = manageTool({
+    async manage(agent, request) {
+      captured = request
+      return { fileName: request.fileName, scope: 'Global', deleted: true }
+    },
+  })
+  const output = await tool.execute({ scope: 'Global', file_name: '要删的', new_file_name: '' }, { agent: { id: 'tool' } })
+  assert.equal(captured.newFileName, '', '空串不能被当成没给')
+  assert.match(output.summary, /已删除记忆文件 要删的/)
+})
+
+await check('解析失败的文件也出现在清单里，并标明不能读写', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'dsh-memory-broken-'))
+  const store = new MemoryStore({ homeDir: home, warn: () => {} })
+  await mkdir(store.globalDir, { recursive: true })
+  await writeFile(join(store.globalDir, '好的.yaml'), 'meta_data:\n  file_name: 好的\n  desc: 描述\ndata:\n  标题:\n    desc: 正文\n', 'utf8')
+  // 映射里混进序列：整份文件解析不出来，但它在磁盘上是存在的。
+  await writeFile(join(store.globalDir, '坏文件.yaml'), 'meta_data:\n  file_name: 坏文件\ndata:\n  标题: 正文\n  - 甲\n', 'utf8')
+  await store.ensureDirectory(store.globalDir, 'Global')
+
+  const workspace = await mkdtemp(join(tmpdir(), 'dsh-memory-broken-ws-'))
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('broken', workspace)
+  await runtime.attach(agent)
+
+  const list = await runtime.read(agent, { scope: 'Global' })
+  assert.match(list, /- 好的 \[Global\]/)
+  assert.match(list, /- 坏文件 \[Global\] 解析失败/)
+  // 按名读仍然报出具体的解析错误，不是「找不到」。
+  await assert.rejects(() => runtime.read(agent, { scope: 'Global', fileName: '坏文件' }), /解析失败/)
+  // 只有坏文件、没有正常文件时也不算「还没有任何记忆文件」。
+  await rm(join(store.globalDir, '好的.yaml'), { force: true })
+  store.forget(store.globalDir, '好的.yaml')
+  assert.match(await runtime.read(agent, { scope: 'Global' }), /- 坏文件 \[Global\] 解析失败/)
+
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(home, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('update_at 落盘是本地时间，带上时区偏移', async () => {
+  const { store, workspace } = await sandbox()
+  await store.write(store.globalDir, 'Global', filled('笔记', new Map([['主题', node('正文')]])))
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('clock', workspace)
+  await runtime.attach(agent)
+  await runtime.read(agent, { scope: 'Global', fileName: '笔记' })
+  await runtime.edit(agent, { scope: 'Global', fileName: '笔记', path: ['主题'], newString: '改过' })
+
+  const raw = await readFile(join(store.globalDir, '笔记.yaml'), 'utf8')
+  const stamp = parseDocument(raw).roots.get('主题').update_at
+  assert.match(stamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
+  // 墙上时间是本地时间，不是 UTC：小时要和本机时钟对得上。
+  const now = new Date()
+  assert.equal(Number(stamp.slice(11, 13)), now.getHours(), '小时要用本地时间')
+  const offset = -now.getTimezoneOffset()
+  const expected = `${offset < 0 ? '-' : '+'}${String(Math.abs(Math.trunc(offset / 60))).padStart(2, '0')}:${String(Math.abs(offset % 60)).padStart(2, '0')}`
+  assert.ok(stamp.endsWith(expected), `偏移要是本机时区 ${expected}`)
 
   store.dispose()
   await rm(workspace, { recursive: true, force: true })

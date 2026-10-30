@@ -50,7 +50,7 @@ node test/dump.mjs
 | `lib/cache.js` | 目录加载、缓存索引、按文件名定位 | `MemoryCache` `FILE_EXTENSION` `logRelative` `isLogRelative` |
 | `lib/watch.js` | 文件监听与 200ms 防抖重载 | `MemoryWatcher` |
 | `lib/writer.js` | 写入队列、hash 乐观锁、重名判定 | `MemoryWriter` |
-| `lib/atomic.js` | 原子落盘（temp + rename + Windows EPERM 重试） | `writeAtomic` |
+| `lib/atomic.js` | 原子落盘（temp + rename + Windows EPERM 重试）、同文件判定 | `writeAtomic` `sameFileOnDisk` |
 | `lib/snapshot.js` | 会话快照（三份）与标题级比对 | `headingHashes` `snapshotEntry` `diffSections` `diffEntries` `readSnapshot` `writeSnapshot` `copySnapshot` `removeSnapshot` `isStale` `pruneSnapshots` |
 | `lib/notice.js` | 比对结果 → 通知文案（空列表返回 `undefined`） | `NOTICE_SOURCE_KIND` `renderNotice` `renderBrokenNotice` |
 | `lib/render.js` | 文档 → 文本（注入、读取、日志、文件清单、format 段） | `renderInjection` `renderRead` `renderLog` `renderLogRange` `renderFileList` `renderFormats` |
@@ -59,7 +59,7 @@ node test/dump.mjs
 | `lib/document.js` | YAML ↔ 文档对象 | `parseDocument` `serializeDocument` |
 | `lib/model.js` | 常量、字段校验、节点与文档构造 | `MAX_DEPTH` `RESERVED_KEYS` `INJECT_IGNORE_OPTIONS` `INJECT_IGNORE_LEVELS` `SCOPES` `createNode` `createDocument` `cloneDocument` 等 |
 | `lib/tree.js` | 标题树查找与改写 | `walk` `findNode` `findSiblings` `touchPath` `renameHeading` |
-| `lib/text.js` | 文本规范化 | `normalizeBody` `normalizeFragment` `normalizeMetaLine` `normalizeMetaBlock` |
+| `lib/text.js` | 文本规范化 + `update_at` 时间戳格式 | `normalizeBody` `normalizeFragment` `normalizeMetaLine` `normalizeMetaBlock` `localTimestamp` |
 | `lib/path.js` | 标题路径 | `PATH_SEPARATOR` `normalizeHeadingPath` `headingLabel` |
 | `lib/hash.js` | 哈希 | `hashText` `shortHash` |
 | `lib/paths.js` | 目录布局（唯一的路径来源） | `resolveLayout` |
@@ -147,6 +147,7 @@ node test/dump.mjs
 一天一个文件，`log/<yyyy-mm-dd>.yaml`，最多 2 级（`LOG_MAX_DEPTH`）。一级标题固定是当天日期（= `file_name`），二级是 `HH:MM 摘要`，条目的 `desc` 就是不限长度的细节。摘要写在标题里，是为了"一次 `memory_edit` 记完一件事"，不用先写摘要再寻址到 `detail`。
 
 - `meta_data` 只有 `file_name` 和按 `scope` 写死的 `desc`（`LOG_DESCS`）；多一个键就解析失败。
+- 摘要长度（`logSummaryMaxChars`）**只在新建条目时校验**。已存在条目的编辑只动正文和关键词，路径里的那份摘要没被改，就不该拦——早期把校验放在两个分支之外导致"上限调低后老条目连关键词都改不了"，只能靠改名绕过。
 - 写：`heading_path` 必须写全 `# 2026-10-27 > ## 12:35 摘要`，少一层多一层都报错；条目按时间插入；只能写当天；不能改名、不能删除。
 - 读：`file_name` 是日期（`2026-10-26..2026-10-27` 是范围），`heading_path` 用 `12:00..14:00` 收窄；范围分隔符是 `..`，路径分隔符是 ` > `，混用会明确报错，不猜。非法范围**显式抛错**，不会静默把当天条目全丢掉。
 - 同一时刻可以有多条条目（`19:20 去了` / `19:20 回来`），路径的键是完整标题不是时分；摘要不参与匹配。
@@ -169,6 +170,8 @@ node test/dump.mjs
 
 `defineTool()` 统一提供：未知参数报错、缺必填报错、`exec.agent` 为空报错、`DocumentError` 转成人能读的文案。`memory_edit` / `memory_manage` 在子 agent 里被 `tools.restrict({ deny })` 关掉。
 
+`memory_read` 不给 `file_name` 时列清单。解析失败的文件也列进去并标「解析失败，改好之前不能读写」，后面一行是解析错误——它们还在磁盘上，藏起来会显得像被删了。`brokenFilesOf()` 是收集点，`renderFileList(documents, broken)` 是唯一渲染点。
+
 `memory_edit` 的语义（`applyEdit`）：
 
 - `heading_path` 指向不存在的标题 → 新建（父级必须已存在）。
@@ -178,6 +181,14 @@ node test/dump.mjs
 - `keyword` 先删后加，同一行只留一份；每次编辑更新目标标题与所有祖先的 `update_at`。
 - 编辑在 `cloneDocument` 副本上做，写盘失败不会让缓存显示一份没落盘的文本。
 - 写前必须读过：`rememberRead()` 记下哈希，编辑时比对；`store.write()` 再比一次磁盘哈希。
+
+`memory_manage` 的语义（`MemoryRuntime.manage`，`new_file_name` 一个参数三种意思）：
+
+- 没有 `file_name` → 新建，名字取自 `new_file_name`；日期形式的文件名拒绝（留给日志）。
+- 有 `file_name`、没有 `new_file_name` → 只改 `desc` / `format` / `inject_ignore`。
+- 有 `file_name` + 不同的 `new_file_name` → 改名：改 `document.fileName` 后**写新路径、再删旧文件**（顺序不能反，否则乐观锁读的原路径已经没了），`baseRelative` 指向旧路径让哈希锁落在旧文件上；旧文件删不掉就报错而不是留两份。
+- `new_file_name` 是**空字符串** → 删掉整份文件（`rm` + `store.forget`），日志拒绝。注意 `tools.js` 里这一项必须读原始 `args.new_file_name`，不能走 `stringArg`——它把空串当成没给，删除会退化成一次空保存。
+- 改名后 `inject_ignore` 的校验标签用新名字；同目录重名直接拒绝。
 
 ## 11. 面板与 chunk 契约
 
@@ -238,6 +249,7 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 
 - **改文本文件只能用 read / edit / write 工具。** 别用 PowerShell 的 `Get-Content -Raw | Set-Content -Encoding UTF8`：它会把 UTF-8 当 GBK 解码，整份文件变乱码（本项目真被这个毁过一次）。用 Node 脚本做行区间手术是安全的（`readFileSync(...,'utf8')` → `writeFileSync(...,'utf8')`），但仍要跑 `node --check` 并复读。
 - **别给"测试正在等"的定时器加 `unref()`。** `unref()` 让事件循环不再等它，顶层 `await` 就永远不 settle，Node 判定进程无事可做直接退出（`test/store.test.mjs` 的文件监听用例真被这个打挂过）。`watch.js` 的防抖定时器**不能** unref；`runtime.js` 的午夜切天与快照清扫不参与测试等待，可以 unref。
+- **`update_at` 落盘走 `lib/text.js` 的 `localTimestamp()`**：本地墙上时间带偏移（`2026-10-27T03:18:36+08:00`）。别用 `toISOString()`——那是 UTC，面板和提示词里都会和用户的钟差上几个小时；也别写成不带偏移的裸时间，换个时区就没法和别人的比。生成点只有两个：`runtime.js` 的 `writeEdit()` 和 `panel-service.js` 的 `patchFile()`。内部状态（快照 `updatedAt`、`touched`）仍是 ISO `Z`，那不给用户看。
 - 仓库有 git（`origin` = github.com/2424830124/dsh-memory），历史都在提交里；`.backup/` 是加 git 之前留的临时备份，已经清掉。
 - 中文文案统一用中文全角标点；报错要告诉模型"哪一份、哪个标题、为什么"，不要只说"失败"。
 - 新增行为优先补测试（六份离线 suite 是主要自动验证）；`test/live.mjs` 只在真实宿主里跑。

@@ -228,6 +228,28 @@ await check('没有 old_string 时是追加，摘要上限只管标题', () => {
   )
 })
 
+await check('上限调低后，超长的旧摘要仍然改得动', () => {
+  const log = logOf()
+  // 先按旧上限（200）写一条 68 字的条目，再把上限当成 60 来改它：摘要没被改，
+  // 就不该拦。以前这里校验的是路径里的原标题，改关键词、改正文全被挡回去。
+  const summary = '长'.repeat(68)
+  const title = `12:35 ${summary}`
+  applyEdit(log, { path: ['2026-10-27', title], newString: '第一段' }, 'T')
+  assert.equal(parseLogEntryTitle(title).summary, summary)
+
+  applyEdit(log, { path: ['2026-10-27', title], newString: '第二段' }, 'T', { summaryMaxChars: 60 })
+  assert.equal(logEntries(log)[0][1].desc, '第一段\n\n第二段')
+
+  applyEdit(log, { path: ['2026-10-27', title], addKeywords: ['面'], removeKeywords: [] }, 'T', { summaryMaxChars: 60 })
+  assert.deepEqual(logEntries(log)[0][1].keyword, ['面'])
+
+  // 新建时才校验：同样长度换一条新条目，照样被拒。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', `12:40 ${summary}`], newString: '正文' }, 'T', { summaryMaxChars: 60 }),
+    /日志摘要最多 60 字/,
+  )
+})
+
 await check('条目按时间排序，不按写入顺序', () => {
   const log = logOf()
   applyEdit(log, { path: ['2026-10-27', '14:05 下午'], newString: 'x' }, 'T')
