@@ -89,7 +89,7 @@ node test/dump.mjs
 4. **`desc` / `keyword` / `update_at` 是标题的保留字**，任何层级都不能当标题名。
 5. **同级不能重名**；`file_name` 在"一个会话能看到的目录"里唯一（不同工作区各自同名是允许的）。
 6. **序列化往返稳定**：`serializeDocument` → `parseDocument` 必须得到同一份文档；空字段不写进文件（例外：`meta_data.desc` 无条件写，标题节点的 `desc` / `keyword` 才按空跳过）。
-7. **正文开头不能是 `#`**（会被读成标题行）；中间和后面几行可以。日志的 `old_string` / `new_string` 同理，只在开头这一条上拒绝。
+7. **正文开头不能是 `#`**（会被读成标题行）；中间和后面几行可以。日志正文本条同理（`assertPlainLog()`）；日志的**改名**走另一分支，两边都写成标题行才成立。
 8. **错误绝不外抛**：注入组装、agent 创建、工具管线里的异常都可能毁掉无关请求。每个 hook 都包住，最坏降级成空注入 / `return []` / 一条 warning。
 9. **通知只在这个会话有未告知的变化时发**；何时检查由 `MemoryNotificationScheduler` 决定，唯一的 diff/通知实现点仍是 `MemoryRuntime.notifyAgent()`。
 10. **面板不另做一套渲染**：「原文」和「注入效果」都走 `runtime.fileText()`，跟 `memory_read` / `renderInjection` 同源。
@@ -162,8 +162,9 @@ node test/dump.mjs
 一天一个文件，`log/<yyyy-mm-dd>.yaml`，最多 2 级（`LOG_MAX_DEPTH`）。一级标题固定是当天日期（= `file_name`），二级是 `HH:MM 摘要`，条目的 `desc` 就是不限长度的细节。摘要写在标题里，是为了"一次 `memory_edit` 记完一件事"，不用先写摘要再寻址到 `detail`。
 
 - `meta_data` 只有 `file_name` 和按 `scope` 写死的 `desc`（`LOG_DESCS`）；多一个键就解析失败。
-- 摘要长度（`logSummaryMaxChars`）**只在新建条目时校验**。已存在条目的编辑只动正文和关键词，路径里的那份摘要没被改，就不该拦——早期把校验放在两个分支之外导致"上限调低后老条目连关键词都改不了"，只能靠改名绕过。
-- 写：`heading_path` 必须写全 `# 2026-10-27 > ## 12:35 摘要`，少一层多一层都报错；条目按时间插入；只能写当天；不能改名、不能删除。
+- 摘要长度（`logSummaryMaxChars`）**只在新建条目、或改名换掉摘要时校验**。已存在条目的编辑只动正文和关键词，路径里的那份摘要没被改，就不该拦；改名只换时分更不该拦——早期把校验放在两个分支之外，导致"上限调低后老条目连关键词都改不了"。
+- 写：`heading_path` 必须写全 `# 2026-10-27 > ## 12:35 摘要`，少一层多一层都报错；条目按时间插入；只能写当天；不能删除。
+- 改名：二级条目可以改标题（`old_string` = `## 12:35 旧摘要`，`new_string` = `## 09:10 新摘要`），由 `renameLogEntry()` 处理，改名后 `sortLogEntries()` 重排；**一级标题永不改名**——它就是 `file_name`，改了文档就和文件名对不上。这个分支在 `assertPlainLog()` **之前**，所以"两边都写成标题行"是合法改名，只有剩下的以 `#` 开头的 `new_string` 才算往正文里塞标题。
 - 读：`file_name` 是日期（`2026-10-26..2026-10-27` 是范围），`heading_path` 用 `12:00..14:00` 收窄；范围分隔符是 `..`，路径分隔符是 ` > `，混用会明确报错，不猜。非法范围**显式抛错**，不会静默把当天条目全丢掉。
 - 同一时刻可以有多条条目（`19:20 去了` / `19:20 回来`），路径的键是完整标题不是时分；摘要不参与匹配。
 - 当天文件在 `start()` 和每次 `attach()` 补建；零点 +5 秒切天，定时器 `unref()`。
@@ -198,6 +199,8 @@ node test/dump.mjs
 - `keyword` 先删后加，同一行只留一份；每次编辑更新目标标题与所有祖先的 `update_at`。
 - 编辑在 `cloneDocument` 副本上做，写盘失败不会让缓存显示一份没落盘的文本。
 - 写前必须读过：`rememberRead()` 记下哈希，编辑时比对；`store.write()` 再比一次磁盘哈希。
+
+**返回值只报标题路径，不回显正文**：`[Global] 已更新 我的记忆 > # 沟通方式`。正文已经被写进文件，回显一份只会白占模型的上下文（还要为它做截断）；要确认内容就再读一次。路径由 `paragraphLabel(fileName, path)` 拼：`headingLabel()` 按层级补 `#`，日志（`isDateShaped(fileName)`）去掉与文件名重复的日期级，剩下那级仍按 `##` 写，所以 `headingLabel(path, depth)` 带了个 `depth` 参数来偏移层级。唯一的长度限制是 `middleEllipsis()`（60 字，中间省略），只作用于路径。
 
 `memory_manage` 的语义（`MemoryRuntime.manage`，`new_file_name` 一个参数三种意思）：
 

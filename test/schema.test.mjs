@@ -218,8 +218,8 @@ try {
   console.log(`  FAIL memory_edit 描述未拼上 format: ${error.message}`)
 }
 
-// Long results are shortened in the middle: the model still needs to recognise
-// which file and which branch it touched, without paying for the whole path.
+// The result names the heading path and nothing else: no stored body is echoed
+// back, so the answer costs one line no matter how much text was written.
 try {
   const longTitle = '一个特别长的标题名字'.repeat(4)
   const stub = {
@@ -235,19 +235,18 @@ try {
     new_string: `## ${longTitle}新的`,
   }, { agent: {} })).summary
   assert.ok(summary.includes(MIDDLE_MARKER), `长路径没有被截断：${summary}`)
-  assert.ok(summary.startsWith('[Global] 已改名 我的记忆 > '), `截断后应保留开头：${summary}`)
+  assert.ok(summary.startsWith('[Global] 已改名 我的记忆 > # '), `截断后应保留开头：${summary}`)
   assert.ok(!summary.includes(longTitle.repeat(2)), '截断后仍然保留了整段长标题')
 
-  const short = (await editTool({ async edit() { return { outcome: { body: '习惯用中文交流。' }, scope: 'Global' } } })
+  const short = (await editTool({ async edit() { return { outcome: { path: ['工具'] }, scope: 'Global' } } })
     .execute({ scope: 'Global', file_name: '我的记忆', heading_path: '# 工具', new_string: '习惯用中文交流。' }, { agent: {} })).summary
-  assert.equal(short, '[Global] 已更新 我的记忆 > 工具\n习惯用中文交流。', `短结果不该被截断：${JSON.stringify(short)}`)
+  assert.equal(short, '[Global] 已更新 我的记忆 > # 工具', `短结果不该被截断，也不该回显正文：${JSON.stringify(short)}`)
 
-  const longBody = '很长的正文'.repeat(60)
-  const echoed = (await editTool({ async edit() { return { outcome: { body: longBody }, scope: 'Workspace' } } })
-    .execute({ scope: 'Global', file_name: '我的记忆', heading_path: '# 工具', new_string: longBody }, { agent: {} })).summary
-  assert.ok(echoed.includes(MIDDLE_MARKER), '长正文没有被截断')
-  assert.ok(echoed.startsWith('[Workspace] 已更新 我的记忆 > 工具\n很长的正文'), `正文开头应保留：${echoed.slice(0, 40)}`)
-  console.log('  ok   memory_edit 的长结果省略中间部分')
+  // 改名时两头都报路径，都带 #，也都不带正文。
+  const renamed = (await editTool({ async edit() { return { outcome: { renamed: true, path: ['新名字'] }, scope: 'Workspace' } } })
+    .execute({ scope: 'Global', file_name: '我的记忆', heading_path: '# 旧名字', old_string: '# 旧名字', new_string: '# 新名字' }, { agent: {} })).summary
+  assert.equal(renamed, '[Workspace] 已改名 我的记忆 > # 旧名字 为 我的记忆 > # 新名字', `改名的两头都该带 #：${JSON.stringify(renamed)}`)
+  console.log('  ok   memory_edit 的结果只报标题路径，不回显正文')
 } catch (error) {
   failures.push({ name: 'memory_edit.ellipsis', error })
   console.log(`  FAIL memory_edit 长结果未按预期截断: ${error.message}`)

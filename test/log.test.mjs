@@ -258,21 +258,123 @@ await check('条目按时间排序，不按写入顺序', () => {
   assert.deepEqual(entriesOf(log), ['09:10 早上', '12:35 中午', '14:05 下午'])
 })
 
-await check('日志条目不能改名也不能删，正文开头不能是 #', () => {
+await check('日志条目可以改名，一级标题不能改，条目不能删，正文开头不能是 #', () => {
   const log = logOf()
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '还是那家店' }, 'T')
+
+  // 一级标题就是 file_name，改名会被拒，并指回二级条目。
+  assert.throws(
+    () =>
+      applyEdit(
+        log,
+        { path: ['2026-10-27', '12:35 吃了面'], oldString: '# 2026-10-27', newString: '# 2026-10-28' },
+        'T',
+      ),
+    /一级标题就是当天日期/,
+  )
+
   assert.throws(() => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], removeOnly: true }, 'T'), /日志条目不能删除/)
+
+  // 只改正文时 "#" 仍然只在标题行出现：两边都写成标题行才算改名。
   assert.throws(
     () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '## 新标题' }, 'T'),
-    /开头都不能是 "#"/,
+    /正文开头不能是 "#"/,
   )
   assert.throws(
     () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '#吃了面', newString: '吃了面' }, 'T'),
-    /开头都不能是 "#"/,
+    /正文的开头不能是 "#"/,
   )
   // 中间带 # 是普通正文，允许。
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '还是那家店', newString: '还是那家 # 面馆' }, 'T')
   assert.equal(logEntries(log)[0][1].desc, '还是那家 # 面馆')
+})
+
+await check('改二级条目的时分和摘要，正文和关键词跟着走，位置重排', () => {
+  const log = logOf()
+  applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '还是那家店' }, 'T')
+  applyEdit(log, { path: ['2026-10-27', '14:05 下午'], newString: 'x' }, 'T')
+  applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], addKeywords: ['午饭'] }, 'T')
+
+  const outcome = applyEdit(
+    log,
+    { path: ['2026-10-27', '12:35 吃了面'], oldString: '## 12:35 吃了面', newString: '## 09:10 吃了面' },
+    'T',
+  )
+  assert.equal(outcome.renamed, true)
+  assert.deepEqual(outcome.path, ['2026-10-27', '09:10 吃了面'])
+  assert.deepEqual(entriesOf(log), ['09:10 吃了面', '14:05 下午'])
+
+  const moved = logEntries(log)[0][1]
+  assert.equal(moved.desc, '还是那家店')
+  assert.deepEqual(moved.keyword, ['午饭'])
+
+  // 只改摘要也走同一条路。
+  applyEdit(log, { path: ['2026-10-27', '09:10 吃了面'], oldString: '## 09:10 吃了面', newString: '## 09:10 吃了牛肉面' }, 'T')
+  assert.deepEqual(entriesOf(log), ['09:10 吃了牛肉面', '14:05 下午'])
+  assert.equal(logEntries(log)[0][1].desc, '还是那家店')
+})
+
+await check('改日志标题时的形状校验', () => {
+  const log = logOf()
+  applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: 'x' }, 'T')
+
+  // "#" 个数必须等于层级。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '## 12:35 吃了面', newString: '# 12:35 吃了面' }, 'T'),
+    /一级标题就是当天日期/,
+  )
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '## 12:35 吃了面', newString: '### 12:35 吃了面' }, 'T'),
+    /个数必须等于标题层级/,
+  )
+  // old_string 必须正好是原标题行。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '## 12:36 吃了面', newString: '## 09:10 吃了面' }, 'T'),
+    /old_string 必须正好是/,
+  )
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '## 09:10 吃了面' }, 'T'),
+    /必须用 old_string 给出原标题行/,
+  )
+  // 新标题本身要合法。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '## 12:35 吃了面', newString: '## 25:00 吃了面' }, 'T'),
+    /要以时分开头/,
+  )
+  // 同级重名。
+  applyEdit(log, { path: ['2026-10-27', '14:05 下午'], newString: 'x' }, 'T')
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '## 12:35 吃了面', newString: '## 14:05 下午' }, 'T'),
+    /同级已存在标题/,
+  )
+})
+
+await check('改条目时摘要上限只拦正在改的摘要', () => {
+  const summary = '一'.repeat(80)
+  const log = logOf()
+  // 用宽松上限先写一条超长摘要的旧条目。
+  applyEdit(log, { path: ['2026-10-27', `12:35 ${summary}`], newString: '正文' }, 'T', { summaryMaxChars: 200 })
+
+  // 收紧上限后，只改时分不碰摘要：允许。
+  applyEdit(
+    log,
+    { path: ['2026-10-27', `12:35 ${summary}`], oldString: `## 12:35 ${summary}`, newString: `## 09:10 ${summary}` },
+    'T',
+    { summaryMaxChars: 60 },
+  )
+  assert.deepEqual(entriesOf(log), [`09:10 ${summary}`])
+
+  // 改摘要本身就要守新上限。
+  assert.throws(
+    () =>
+      applyEdit(
+        log,
+        { path: ['2026-10-27', `09:10 ${summary}`], oldString: `## 09:10 ${summary}`, newString: `## 09:10 ${summary}改为${summary}` },
+        'T',
+        { summaryMaxChars: 60 },
+      ),
+    /日志摘要最多 60 字/,
+  )
 })
 
 await check('关键词加在二级标题上，一级标题不沾', () => {
@@ -338,6 +440,7 @@ await check('工具描述告诉模型怎么写日志', () => {
   assert.match(edit, /yyyy-mm-dd > ## hh:mm/)
   assert.match(edit, /200/)
   assert.match(edit, /一级是当天日期/)
+  assert.match(edit, /改二级条目的时分或摘要用改名/)
   assert.doesNotMatch(edit, /例如/, '描述里不放具体例子，容易误导')
   assert.match(logReadRules(), /yyyy-mm-dd/)
 })
@@ -507,12 +610,22 @@ await check('工具的返回文案：日期只出现一次，挂关键词不算�
   }
 
   const created = await call({ scope: 'Global', file_name: today, heading_path: `# ${today} > ## 19:20 定了返回格式`, new_string: '正文' })
-  // 日志的一级标题就是 file_name，不能再在文案里重复一遍。
-  assert.equal(created.summary, `[Global] 已新建 ${today} > 19:20 定了返回格式\n正文`)
+  // 日志的一级标题就是 file_name，不能再在文案里重复一遍；剩下的那一级照旧带 ##。
+  assert.equal(created.summary, `[Global] 已新建 ${today} > ## 19:20 定了返回格式`)
 
   // 只挂关键词不改正文：既不报「没有给出要改动的内容」，也不回显正文。
   const keyed = await call({ scope: 'Global', file_name: today, heading_path: `# ${today} > ## 19:20 定了返回格式`, add_keyword: ['返回格式'] })
-  assert.equal(keyed.summary, `[Global] 已更新 ${today} > 19:20 定了返回格式`)
+  assert.equal(keyed.summary, `[Global] 已更新 ${today} > ## 19:20 定了返回格式`)
+
+  // 改条目的时分也是「已改名」，两头都只报路径。
+  const renamed = await call({
+    scope: 'Global',
+    file_name: today,
+    heading_path: `# ${today} > ## 19:20 定了返回格式`,
+    old_string: '## 19:20 定了返回格式',
+    new_string: '## 19:25 定了返回格式',
+  })
+  assert.equal(renamed.summary, `[Global] 已改名 ${today} > ## 19:20 定了返回格式 为 ${today} > ## 19:25 定了返回格式`)
 
   // 快照是 fire-and-forget 写的，拆除目录前要等它落完，否则它会重建 sessions/。
   await runtime.flush()

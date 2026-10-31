@@ -12,3 +12,6 @@ pnpm-lock.yaml
 
 # packaging leftovers
 *.tgz
+
+# harness scratch files (.tmp-session.jsonl and friends)
+.tmp*
