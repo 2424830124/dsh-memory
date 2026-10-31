@@ -459,7 +459,7 @@ await check('两天一起读：一份头部，日期之间用 --- 隔开', async
   await rm(home, { recursive: true, force: true })
 })
 
-await check('日志默认不进提示词，打开 injectLog 后新会话才带上', async () => {
+await check('日志默认进提示词，关掉 injectLog 后新会话才不带', async () => {
   const { home, store, runtime, agent } = await runtimeSandbox()
   const today = formatLogDate()
   // 有正文的记忆文件才进注入：只剩文件头的文件整份跳过，所以这里得挂一个标题。
@@ -477,20 +477,21 @@ await check('日志默认不进提示词，打开 injectLog 后新会话才带�
 
   const injected = runtime.sectionText({ agent })
   assert.match(injected, /我的记忆/)
-  assert.doesNotMatch(injected, /09:10 早上/)
+  assert.match(injected, /09:10 早上/)
 
-  // 打开注入：已经在跑的会话仍拿原来那份（注入文本冻结，否则每次改配置都会
+  // 关掉注入：已经在跑的会话仍拿原来那份（注入文本冻结，否则每次改配置都会
   // 把前缀缓存冲掉），新开的会话才按新配置渲染。
-  runtime.config.injectLog = true
+  runtime.config.injectLog = false
   assert.equal(runtime.sectionText({ agent }), injected, '老会话的注入文本不随配置变')
 
   const fresh = freshAgent('a2')
-  const withLog = runtime.sectionText({ agent: fresh })
-  assert.match(withLog, new RegExp(today))
-  assert.match(withLog, /## 09:10 早上/)
-  assert.match(withLog, /我的记忆/)
+  const withoutLog = runtime.sectionText({ agent: fresh })
+  assert.doesNotMatch(withoutLog, new RegExp(today))
+  assert.doesNotMatch(withoutLog, /09:10 早上/)
+  assert.match(withoutLog, /我的记忆/)
 
-  // 摘要注入时原样照搬：长度在上游（logSummaryMaxChars）就卡住了，这里不再截一次。
+  // 再打开：摘要原样照搬，长度在上游（logSummaryMaxChars）就卡住了，这里不再截一次。
+  runtime.config.injectLog = true
   await runtime.edit(agent, { fileName: today, path: [today, '09:11 写了一很长的摘要'], newString: 'x' })
   const newest = freshAgent('a3')
   assert.match(runtime.sectionText({ agent: newest }), /## 09:11 写了一很长的摘要/)

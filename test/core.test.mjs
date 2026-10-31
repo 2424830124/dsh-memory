@@ -10,6 +10,12 @@ import { DocumentError } from '../lib/errors.js'
 import { createDocument } from '../lib/model.js'
 import { normalizeHeadingPath } from '../lib/path.js'
 import { renderNotice } from '../lib/notice.js'
+import {
+  HARNESS_IDENTITY_SECTION,
+  PERSONA_SECTION,
+  overrideHarnessIdentity,
+  overridePersona,
+} from '../lib/prompt-override.js'
 import { renderFormats, renderInjection, renderRead } from '../lib/render.js'
 import { diffEntries, diffSections, headingHashes } from '../lib/snapshot.js'
 import { normalizeBody } from '../lib/text.js'
@@ -311,6 +317,61 @@ check('什么都不注入的文件连文件头都不出现', () => {
   assert.match(renderFormats([off]), new RegExp(off.fileName))
   // 读取也不受影响：全文照旧。
   assert.match(renderRead(off), new RegExp(off.fileName))
+})
+check('注入改写 persona 段：只换文本，别的段与顺序不动', () => {
+  const assembly = {
+    sections: [
+      { name: 'harness', text: 'identity' },
+      { name: PERSONA_SECTION, text: '原来的 persona' },
+      { name: 'tools', text: 'tools' },
+    ],
+    variables: { model: 'm' },
+  }
+  const rewritten = overridePersona(assembly, '<memory>…</memory>')
+  assert.notEqual(rewritten, assembly)
+  // 输入本身不能被动过：瀑布里别人拿到的还是自己交出去的那份。
+  assert.equal(assembly.sections[1].text, '原来的 persona')
+  assert.deepEqual(rewritten.sections.map((section) => section.name), ['harness', PERSONA_SECTION, 'tools'])
+  assert.equal(rewritten.sections[0].text, 'identity')
+  assert.equal(rewritten.sections[1].text, '<memory>…</memory>')
+  // 记忆是用户文本：正文里的 `{{…}}` 不能被当成提示词变量去插值。
+  assert.equal(rewritten.sections[1].interpolate, false)
+  assert.equal(rewritten.variables.model, 'm')
+})
+check('记忆为空或没有 persona 段时原样返回，persona 不会被挖掉', () => {
+  const assembly = { sections: [{ name: PERSONA_SECTION, text: 'persona' }] }
+  assert.equal(overridePersona(assembly, ''), assembly)
+  const other = { sections: [{ name: '别的段', text: '原样' }] }
+  assert.equal(overridePersona(other, '记忆'), other)
+  assert.equal(overridePersona({}, '记忆').sections, undefined)
+  assert.equal(overridePersona(undefined, '记忆'), undefined)
+})
+check('预设改写 harness identity：有段换文本，没段插到最前', () => {
+  const assembly = {
+    sections: [
+      { name: HARNESS_IDENTITY_SECTION, text: 'You are an AI agent powered by DeepSeek Harness.' },
+      { name: PERSONA_SECTION, text: 'persona' },
+    ],
+  }
+  const rewritten = overrideHarnessIdentity(assembly, '新的预设')
+  assert.notEqual(rewritten, assembly)
+  assert.equal(assembly.sections[0].text, 'You are an AI agent powered by DeepSeek Harness.')
+  assert.deepEqual(rewritten.sections.map((section) => section.name), [HARNESS_IDENTITY_SECTION, PERSONA_SECTION])
+  assert.equal(rewritten.sections[0].text, '新的预设')
+  assert.equal(rewritten.sections[0].interpolate, false)
+  assert.equal(rewritten.sections[1].text, 'persona')
+
+  // 宿主关掉 includeHarnessIdentity 时这一段根本不存在，预设要自己补一格，
+  // 而且排在所有别的段前面（identity 的 order 是 -1000）。
+  const inserted = overrideHarnessIdentity({ sections: [{ name: PERSONA_SECTION, text: 'persona' }] }, '预设')
+  assert.deepEqual(inserted.sections.map((section) => section.name), [HARNESS_IDENTITY_SECTION, PERSONA_SECTION])
+  assert.equal(inserted.sections[0].interpolate, false)
+})
+check('没有预设时原样返回，原生 identity 不被挖掉', () => {
+  const assembly = { sections: [{ name: HARNESS_IDENTITY_SECTION, text: '原生 identity' }] }
+  assert.equal(overrideHarnessIdentity(assembly, ''), assembly)
+  assert.equal(overrideHarnessIdentity({}, '预设').sections, undefined)
+  assert.equal(overrideHarnessIdentity(undefined, '预设'), undefined)
 })
 check('读取忽略 inject_ignore 并带上 update_at', () => {
   const doc = parseDocument(SAMPLE)

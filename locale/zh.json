@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "长期记忆",
-    "description": "以 YAML 记忆文件注入提示词并跨会话共享，提供读取、编辑、管理三个工具与变更通知。"
+    "title": "长期记忆与预设",
+    "description": "以 YAML 记忆文件注入提示词并跨会话共享，另可选用 Markdown 预设整体替换提示词开头的 harness identity；提供读取、编辑、管理三个工具与变更通知。"
   }
 }

@@ -6,9 +6,11 @@
 
 DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文件（标题树），插件把它注入提示词，给模型三个工具读写，并按会话活动状态合并检查别的会话改动后发不唤醒通知。另有一份按天分文件的**日志**（短期记忆）。
 
-- 做：提示词注入、读写工具、跨会话通知、按日日志、设置面板。
+还有一份**预设目录**（`<dataDir>/preset/*.md`，纯文本）：每个会话可以选一份，选中后它会整体替换掉宿主的 harness identity（提示词最开头那句）。预设不是记忆——不参与 `inject_ignore`、日志或工具，只是开场身份的一层皮；人设卡、行为准则这类一整段的开头文本都放这里。发行包里自带几份起步预设（仓库的 `presets/*.md`），第一次启动时由 `seedPresets()` 拷进这个目录，只补没见过的名字。
+
+- 做：提示词注入（记忆 + 预设）、读写工具、跨会话通知、按日日志、设置面板（含「预设」页签）。
 - 不做：自动召回、删除记忆目录、跨层级移动章节、删除日志。
-- 依赖只有 `yaml`。ESM，无构建步骤，`"type": "module"`。
+- 运行时依赖 `yaml` 和 `@deepseek-ai/schemastery`（宿主同款的配置 schema 库；`link:` 安装时它必须也是本包的依赖，否则从仓库目录解析不到）。ESM，无构建步骤，`"type": "module"`。
 
 用户画像：聊天、扮演、轻量编程；记忆存量预期不大，塞得进提示词。
 
@@ -35,7 +37,7 @@ node test/dump.mjs
 
 ## 3. 分层与模块
 
-依赖单向：`tools → runtime → notification-scheduler/panel-service/store/snapshot/notice/render/edit → document/model/tree → text/path`；共享的 `file-order` 与纯策略 `log-injection` 不依赖 runtime。`notification-scheduler` 只负责活动状态、变更版本与检查节奏，通过回调委托快照比较/通知；`panel-service` 通过显式回调使用 runtime 的会话目录解析和通知能力，不反向 import runtime。`errors` 谁都能 import，它谁也不 import。底层不 import 上层。
+依赖单向：`tools → runtime → notification-scheduler/panel-service/store/snapshot/notice/render/edit → document/model/tree → text/path`；共享的 `file-order`、纯策略 `log-injection` 与 `prompt-override` 不依赖 runtime；`preset.js` 只碰磁盘（`atomic.js` 与目录监听），也不认识运行时。`notification-scheduler` 只负责活动状态、变更版本与检查节奏，通过回调委托快照比较/通知；`panel-service` 通过显式回调使用 runtime 的会话目录解析和通知能力，不反向 import runtime。`errors` 谁都能 import，它谁也不 import。底层不 import 上层。
 
 | 模块 | 职责 | 对外 |
 | --- | --- | --- |
@@ -44,6 +46,9 @@ node test/dump.mjs
 | `lib/panel-service.js` | 浏览器面板文件用例：概览、定位、渲染、编辑、创建与删除；通过显式回调接收会话目录解析和通知能力 | `MemoryPanelService` |
 | `lib/file-order.js` | 统一提示词注入和面板列表共用的文件排序策略 | `orderByConfig` |
 | `lib/log-injection.js` | 纯日志注入选择策略：空日过滤、最近天数窗口、详细日选择 | `selectLogInjection` |
+| `lib/prompt-override.js` | 纯策略：把记忆写进宿主 persona 前缀段、把预设写进 harness identity（组装结果的原地改写） | `PERSONA_SECTION` `HARNESS_IDENTITY_SECTION` `overridePersona` `overrideHarnessIdentity` |
+| `lib/preset.js` | 预设目录（`*.md`）的加载、热加载、名字校验与读写，按会话的选择与持久化 | `PRESET_DIR_NAME` `PresetStore` `normalizePresetName` `readPresetSelection` `writePresetSelection` `clearPresetSelection` |
+| `lib/seed-presets.js` | 把包里的 `presets/*.md` 拷进用户的预设目录，标记已给过的名字，从不覆盖 | `SEED_MARKER_NAME` `seedPresets` |
 | `lib/notification-scheduler.js` | 跨会话通知检查节奏：目录 revision、活动 agent、空闲用户边界与共享轮询器 | `MemoryNotificationScheduler` `NOTIFICATION_POLL_MS` |
 | `lib/tools.js` | 三个工具的定义与参数校验 | `TOOL_NAMES` `readTool` `editTool` `manageTool` `renderEditDescription` |
 | `lib/store.js` | 磁盘门面，把 cache/watch/writer 拼起来 | `MemoryStore` |
@@ -57,9 +62,9 @@ node test/dump.mjs
 | `lib/edit.js` | 一次编辑请求的全部语义 | `applyEdit` `parseHeadingLine` |
 | `lib/log.js` | 日志形状、日期与时间查询、固定规则文案 | `LOG_DIR_NAME` `LOG_MAX_DEPTH` `DEFAULT_SUMMARY_MAX_CHARS` `LOG_DESCS` `logRules` `logReadRules` 等 |
 | `lib/document.js` | YAML ↔ 文档对象 | `parseDocument` `serializeDocument` |
-| `lib/model.js` | 常量、字段校验、节点与文档构造 | `MAX_DEPTH` `RESERVED_KEYS` `INJECT_IGNORE_OPTIONS` `INJECT_IGNORE_LEVELS` `SCOPES` `createNode` `createDocument` `cloneDocument` 等 |
+| `lib/model.js` | 常量、字段校验、节点与文档构造 | `MAX_DEPTH` `RESERVED_KEYS` `INJECT_IGNORE_OPTIONS` `INJECT_IGNORE_LEVELS` `SCOPES` `createNode` `createDocument` `cloneDocument` `normalizeScope` `normalizeKind` 等 |
 | `lib/tree.js` | 标题树查找与改写 | `walk` `findNode` `findSiblings` `touchPath` `renameHeading` |
-| `lib/text.js` | 文本规范化 + `update_at` 时间戳格式 | `normalizeBody` `normalizeFragment` `normalizeMetaLine` `normalizeMetaBlock` `localTimestamp` |
+| `lib/text.js` | 文本规范化、`update_at` 时间戳格式与错误文案拼装 | `normalizeBody` `normalizeFragment` `normalizeMetaLine` `normalizeMetaBlock` `localTimestamp` `formatFailureText` |
 | `lib/path.js` | 标题路径 | `PATH_SEPARATOR` `normalizeHeadingPath` `headingLabel` |
 | `lib/hash.js` | 哈希 | `hashText` `shortHash` |
 | `lib/paths.js` | 目录布局（唯一的路径来源） | `resolveLayout` |
@@ -67,10 +72,12 @@ node test/dump.mjs
 | `lib/config-schema.js` | 配置项的单一事实来源 | `CONFIG_FIELDS` `CONFIG_FIELD_BY_KEY` `defaultSettings` `readField` `formatScalar` |
 | `lib/config.js` | 配置文件读写（就地改行、保留注释） | `CONFIG_FILE_NAME` `loadConfigFile` `saveConfigValue` |
 | `lib/settings-route.js` | 设置面板的 HTTP 端点 | `SETTINGS_ROUTE` `createSettingsHandler` |
-| `ui/client.js` | 浏览器侧「记忆」标签页：装配、i18n、样式、状态与 effect | 模块工厂，注册进 `conversation.view` |
+| `lib/subagent.js` | 子 agent 判定（会话头、委派深度、`agent.options`） | `isSubagentAgent` |
+| `ui/client.js` | 浏览器侧「记忆」标签页：装配、i18n、样式、状态与 effect；另含新会话那一行的预设下拉（`PresetSeat`） | 模块工厂，注册进 `conversation.view` 与 `conversation.hero.options` |
 | `ui/client.settings.js` | 设置表单渲染（chunk） | `renderSettings` |
 | `ui/client.browse.js` | 左栏列表渲染（chunk） | `renderBrowser` |
 | `ui/client.file.js` | 右栏详情与标题卡渲染（chunk） | `renderFile` |
+| `ui/client.presets.js` | 「预设」页签的左栏（新建按钮上方是「DSH 默认身份」卡片、每行删除、新建）与右栏「修改 / 预览」；预设的「使用」在修改栏头，默认身份的「使用」在卡片右侧 | `renderPresets` |
 
 `lib/store.js` 只是门面，三块互不认识：`cache.js` 不认识文件系统事件，`watch.js` 不认识 YAML，`writer.js` 不认识监听。它们之间用 `cache.onLoaded` 回调挂钩，所以 cache 不用 import watcher，也就没有循环依赖。
 
@@ -81,7 +88,7 @@ node test/dump.mjs
 3. **标题最多 4 级**，由 `lib/model.js` 的 `LEVELS` 派生（`MAX_DEPTH`、`RESERVED_KEYS`、`inject_ignore` 合法值都跟着走）。加一层只改 `LEVELS`。
 4. **`desc` / `keyword` / `update_at` 是标题的保留字**，任何层级都不能当标题名。
 5. **同级不能重名**；`file_name` 在"一个会话能看到的目录"里唯一（不同工作区各自同名是允许的）。
-6. **序列化往返稳定**：`serializeDocument` → `parseDocument` 必须得到同一份文档；空字段不写进文件。
+6. **序列化往返稳定**：`serializeDocument` → `parseDocument` 必须得到同一份文档；空字段不写进文件（例外：`meta_data.desc` 无条件写，标题节点的 `desc` / `keyword` 才按空跳过）。
 7. **正文开头不能是 `#`**（会被读成标题行）；中间和后面几行可以。日志的 `old_string` / `new_string` 同理，只在开头这一条上拒绝。
 8. **错误绝不外抛**：注入组装、agent 创建、工具管线里的异常都可能毁掉无关请求。每个 hook 都包住，最坏降级成空注入 / `return []` / 一条 warning。
 9. **通知只在这个会话有未告知的变化时发**；何时检查由 `MemoryNotificationScheduler` 决定，唯一的 diff/通知实现点仍是 `MemoryRuntime.notifyAgent()`。
@@ -89,7 +96,15 @@ node test/dump.mjs
 
 ## 5. 提示词注入
 
-`ctx.systemPrompt.section({ name:'memory', order, text })`，`order` 取宿主 `getSectionOrder('DEPLOYMENT_PERSONA_PREFIX') - 1`——排在 harness identity 之后、persona 之前。**不开放配置**：记忆要先于任务描述被读到；做成选项只会被人调到工具说明中间去。
+**不注册自己的分节。** `system-prompt/assemble` 瀑布里原地改写两段：记忆用 `overridePersona()` 写进宿主的 persona 前缀段（`deployment:persona-prefix`，order 0），预设用 `overrideHarnessIdentity()` 写进 harness identity（`harness:identity`，order -1000）。于是提示词最开头就是「预设 + 记忆」，原来那句 persona 与 identity 都被替换。**不开放配置**：记忆要先于任务描述被读到；做成选项只会被人调到工具说明中间去。
+
+- 为什么不在 `agent.ctx` 注册一个同名分节：分节按作用域分层，preset 已经在同一个 agent 作用域注册了 `deployment:persona-prefix`，再注册会撞 `already registered`。组装瀑布是唯一既覆盖全局与 preset 两层 persona、又不撞层的位置。
+- 组装瀑布里先 `await next()` 再改写，动的是最终结果；别的监听器（模型选择、会话引用之类的变量提供者）照常工作。
+- **记忆渲染为空时保留原 persona；没选预设时保留原生 identity**：没有东西可注入，就不该把提示词开头挖空。宿主关掉 `includeHarnessIdentity` 时 identity 段根本不在组装结果里，预设会自己在最前面补一段 `harness:identity`。
+- 两段都写成 `interpolate: false`：记忆/预设里出现 `{{…}}` 不会被当成宿主变量。
+- 这条路线只适合按会话冻结的文本：记忆每轮都变的话，前缀缓存会被逐轮打掉。**预设是唯一例外**：切预设或改预设文件，下一次组装就直接生效（目录监听 + 200ms 防抖），代价是这一轮前缀缓存作废——这是明确的取舍，不是漏了冻结。
+- 预设选择按会话存在 `state/preset/<sessionId>.json`，面板「预设」页签和 `MemoryRuntime.setPreset()` 是仅有的写入口；名字必须对应 `preset/` 下一份 `.md`，找不到就报错。
+- 设置里的 `defaultPreset` 只在会话 `attach()` 且它还没有选择文件时写一次（`applyDefaultPreset()`）：它是「新会话从哪份开始」，不是「所有会话都改成这份」。之后改默认值不会倒改已经开过的会话，指向的文件被删掉就安静地当没有。
 
 格式：一句 `The following is your own long-term memory.`（在标签外）+ `<memory>` 包住若干 `---` 分隔的文件块。文件头带 `file_name` / `desc` / `scope`；每个标题下是 `- Keyword:`、`- Update at:` 行，然后正文。
 
@@ -98,7 +113,7 @@ node test/dump.mjs
 - `inject_ignore` 生效：`t3` 忽略整棵三级子树，`desc` 忽略所有正文，`t2.desc` 只忽略二级的正文。唯一判断点是 `render.js` 的 `isSuppressed()`。
 - **一份文件渲染出来一个字符都没有，就整个文件不出现**（连文件头）。典型情形是一级标题全关（`t1`），但判断只认「渲染结果为空」，不要去数 `inject_ignore` 里有没有 `t1`——文件里根本没有标题时同样跳过。**只影响注入这一路**——`renderRead()` 和 `memory_edit` 描述里的 `renderFormats()` 照旧列着它，否则模型就改不了那份被排除在提示词之外的文件了。
 - 顺序：全部全局文件 → 全部工作区文件，段内按 `localeCompare(…, 'zh')`；`fileOrder` 把列出的按给定先后排在前面。`overview()` 与 `injectedDocuments()` 共用 `orderByConfig()`，所以面板列表的顺序**就是**注入顺序。
-- 一个文件都没有时返回空串，不注入空块。
+- 一个文件都没有时返回空串；`overridePersona()` 收到空串就原样返回，persona 段不受影响。
 
 ## 6. 会话快照（三份，一个文件）
 
@@ -123,7 +138,7 @@ node test/dump.mjs
 - **为什么冻结前两份**：它们都在请求最前面，改一个字符就切断供应商的前缀缓存。文件一改就重渲染，等于每次编辑都把该会话的缓存作废——而它本来已经看过那批文件了。变化改走通知。
 - **`tools` 怎么按会话冻结**：全局注册的 `memory_edit` 描述是 getter，每次装配重算（列着每个文件的 format）。`index.js` 的 `freezeEditTool()` 在 `agent/created` 里用 `agent.ctx.tools.register()` 注册**同名副本**，描述换成冻结文本——宿主工具层按"自己的层覆盖全局层"解析同名工具。子 agent 不做这件事（它的 `memory_edit` 刚被 `tools.restrict` 拒掉，再注册会绕回去）。
 - **`files` 里为什么收日志**：注入冻结后，别的会话往当天日志追加的内容不会再从实时注入看到，通知是唯一出路。冻结那刻纳入的日志 key 存在 `injected.logKeys`，所以**改注入天数不影响旧会话**，只有重建的新会话遵守新配置。
-- **`updatedAt` 是模型最后一条消息的结束时间**，不是写入时间：一直在说话的会话必须保持同一前缀，只有真闲下来才算数。`snapshotTtlMinutes`（默认 60，`0` 关闭）控制窗口；启动清一次，之后按窗口一半周期清（夹在 1–30 分钟）。`sectionText()` 里也判一次，闲过头的会话丢掉冻结部分重渲染。
+- **`updatedAt` 是模型最后一条消息的结束时间**，不是写入时间：一直在说话的会话必须保持同一前缀，只有真闲下来才算数。`snapshotTtlMinutes`（默认 10080，即 7 天；`0` 关闭）控制窗口；启动清一次，之后按窗口一半周期清（夹在 1–30 分钟）。`sectionText()` 里也判一次，闲过头的会话丢掉冻结部分重渲染。
 - **分叉复制父快照**：`agent.session.header.parentSession` 指向父会话，`copySnapshot()` 拷整份文件。父快照可能已被清掉，或者它自己就过期了——那就当没有基线，按当前状态重建。
 - **版本不符 / 文件损坏 / 缺失**一律当"没有基线"：会话直接采纳当前状态，不回放历史。新会话同理——否则它一开口就会收到一条"所有文件都是新增"的通知。
 - **`sections` 的键是完整标题路径**，所以改父标题会让整棵子树的键都变。`diffSections()` 先做一次改名识别：一对"消失"和"出现"的路径如果等长、只差一处、且内容指纹相同（或子树集合完全一致），合并成一条 `renamed`。这一识别只此一处。
@@ -139,7 +154,7 @@ node test/dump.mjs
 - 检查完并入队即记为"已推进"（`delivered` + `inFlight`），空闲很久的会话不会重复收同一批变化；多个已积累文件变化合成一次 diff/通知。
 - 被丢弃（`agent/inbox/discarded`）→ `release()` 把基线退回去，并释放对应检查 revision，下次边界可重新通知。
 - 被消费（`agent/inbox/claimed`）→ `claim()` 落实快照并用新状态重算。
-- 文案：`<memory_update>` + 一行说明 + 每条变化一行；五种说法 `added` / `updated` / `removed` / `renamed`（带原路径）/ `file`（元数据、更新时间或同级顺序变了）/ `deleted`（整份文件没了）。列表为空时**什么都不发**（`renderNotice()` 返回 `undefined`）。
+- 文案：`<memory_update>` + 一行说明 + 每条变化一行；六种说法 `added` / `updated` / `removed` / `renamed`（带原路径）/ `file`（元数据、更新时间或同级顺序变了）/ `deleted`（整份文件没了）。列表为空时**什么都不发**（`renderNotice()` 返回 `undefined`）。
 - 文件解析失败另发 `<memory_broken>`，同一签名只发一次；坏文件不参与"被删了"的比对。
 
 ## 8. 日志
@@ -152,7 +167,7 @@ node test/dump.mjs
 - 读：`file_name` 是日期（`2026-10-26..2026-10-27` 是范围），`heading_path` 用 `12:00..14:00` 收窄；范围分隔符是 `..`，路径分隔符是 ` > `，混用会明确报错，不猜。非法范围**显式抛错**，不会静默把当天条目全丢掉。
 - 同一时刻可以有多条条目（`19:20 去了` / `19:20 回来`），路径的键是完整标题不是时分；摘要不参与匹配。
 - 当天文件在 `start()` 和每次 `attach()` 补建；零点 +5 秒切天，定时器 `unref()`。
-- 注入（`injectLog`，默认关）：每作用域一份文件头（`kind: log`、`desc`、`scope`），最新的那天带正文，更早的只剩标题；预算四个数见 `CONFIG_FIELDS`；某天没条目就不占预算。`renderLog()` 只渲染一天，`renderInjection()` 负责分组加头。
+- 注入（`injectLog`，默认开；`logInjectEntries` 默认 0 表示不限条数）：每作用域一份文件头（`kind: log`、`desc`、`scope`），最新的那天带正文，更早的只剩标题；预算四个数见 `CONFIG_FIELDS`；某天没条目就不占预算。`renderLog()` 只渲染一天，`renderInjection()` 负责分组加头。
 
 ## 9. 存储层
 
@@ -162,7 +177,9 @@ node test/dump.mjs
 - `ensureDirectory()` 首次加载 + 起 watcher。**在飞的加载记在 `loading` 表**，同目录并发调用共享同一次加载——先塞空缓存再慢慢填，会让第二个调用者看到"已加载"却拿到空列表，文件就像突然不见了。
 - 写入串行化（每路径一条队列，写完自清），temp + rename 落盘；`writeAtomic` 在 Windows 上对 `EPERM`/`EBUSY`/`EACCES` 退避重试，temp 名带进程 id + 时间 + 递增计数（同一毫秒并发写同一路径会撞名）。
 - 乐观锁读的是**原路径**（`baseRelative`）：面板改名时新路径上还没文件，只按新路径算哈希会得到 `undefined`，锁就被跳过了。文件在中间被别人删掉是**报错**而不是静默重建；改名后旧文件删不掉也报错（"请手动删掉，否则会同时存在两份"）。
-- 外部改动 → `reloadFile` → `onChange` → `runtime.handleExternalChange` → 给能看见该目录的会话算通知。
+- 外部改动 → `reloadFile` → `onChange` → `runtime.broadcast(directory)` → 给能看见该目录的会话算通知。
+- 预设不走记忆的 cache/watch/writer：`lib/preset.js` 自己看 `<dataDir>/preset/*.md`（200ms 防抖），整份文本按 UTF-8 读进内存；读失败保留上一份，文件没了就是空串。选择文件在 `state/preset/<sessionId>.json`（原子写），会话 `attach()` 时读回。预设没有 YAML、没有标题、没有工具，别把它接进 `MemoryCache`。
+- 内置预设在 `apply()` 里、`PresetStore.start()` 之前复制：包里的 `presets/*.md` → `<dataDir>/preset/`，用 `COPYFILE_EXCL` 保证同名文件不被覆盖；`state/presets-seeded.json` 记着给过哪些名字，所以用户删掉的一份不会在下次启动时复活，升级后新增的内置预设仍会补上。复制失败只 warning，不挡插件加载。
 
 ## 10. 工具
 
@@ -192,12 +209,12 @@ node test/dump.mjs
 
 ## 11. 面板与 chunk 契约
 
-`ui/client.js` 主包 ~2100 行（状态、effect、i18n、样式、跨区 helper），三个 `ui/client.*.js` 是 chunk，由主包用 `require.async()` 按需加载。**chunk 文件名必须匹配宿主的 `client.*.js` 正则，且与 `ui/client.js` 同目录**——宿主按「bundle 所在目录 + 文件名」读盘。整组放 `ui/` 只是为了让包根目录只剩 `index.js` 一个服务端入口；宿主那边的 URL 形状不变（恒为 `/plugins/<id>/client.js`，与 `clientPath` 无关），所以搬目录不影响加载。
+`ui/client.js` 主包 ~2600 行（状态、effect、i18n、样式、跨区 helper），四个 `ui/client.*.js` 是 chunk，由主包用 `require.async()` 按需加载。**chunk 文件名必须匹配宿主的 `client.*.js` 正则，且与 `ui/client.js` 同目录**——宿主按「bundle 所在目录 + 文件名」读盘。整组放 `ui/` 只是为了让包根目录只剩 `index.js` 一个服务端入口；宿主那边的 URL 形状不变（恒为 `/plugins/<id>/client.js`，与 `clientPath` 无关），所以搬目录不影响加载。
 
 - chunk 里**只有**"拿 props 返回 vnode"的纯函数：没有 hooks、没有 state、不 import 彼此的辅助函数。样式常量、`t`、全部 state 与 setter、以及跨区共用的工厂（`placeholder` / `chips` / `spawnAdd` / `saveFile` …）都由主包当 props 传下去。状态只有一份，chunk 只负责画。
 - 用 `useState` + `useEffect` 加载 chunk，不用 `React.lazy`：不依赖宿主有没有包 Suspense 边界。没加载完之前右栏是 skeleton、左栏和设置表单显示"加载中"。
 - 面板自己定高：`ResizeObserver`（面板 + 滚动宿主）+ 宿主 DOM 的 `MutationObserver` + `window.resize` 触发，`requestAnimationFrame` 合帧。**别改回轮询**。
-- 控件一律用宿主 `@deepseek-ai/dsh-client-ui-primitives` 的（`Button` `Input` `InputNumber` `SegmentedControl` `Switch` `Tag` `InlineAlert` `MarkdownText` `Icon*`）；颜色一律用主题别名（`--dsw-alias-*`），不写死十六进制。图标不透传 `style`，颜色交给外层元素。
+- 控件一律用宿主的 primitives（`Button` `Input` `Switch` `SegmentedControl` `Menu` `Icon*`，来自 `require('@deepseek-ai/dsh-client-ui-primitives')`）；颜色一律用主题别名（`--dsw-alias-*`），不写死十六进制。图标不透传 `style`，颜色交给外层元素（`label-caption` / `label-tertiary` 这类）。
 - 不用 `window.prompt` / `window.confirm`（Electron 里前者不支持、后者同步阻塞会让窗口收不到指针事件），新建/删除都在栏内展开。
 - 保存只替换**刚保存的那一半**草稿，另一半（还没保存的正文或描述）留在原处——把整份草稿重建成磁盘状态等于抹掉用户正在写的东西。
 - 保存按钮用 `inFlight` ref 挡重复点击：回车和按钮能在同一次渲染里各触发一次，`busy` 那时还是 `false`。
@@ -207,16 +224,20 @@ node test/dump.mjs
 
 ```
 GET  /plugins/dsh-memory/settings?session=<id>
-     → { fields, settings, scopes, injectIgnoreOptions, injectIgnoreLevels }
+     → { fields, settings, scopes, presets, injectIgnoreOptions, injectIgnoreLevels }
 GET  …&scope=Global&file=<名>&kind=log
      → 上面那份 + { file: { fileName, scope, kind, source, text, injected, meta, tree } }
+GET  …&preset=<名>
+     → 上面那份 + { preset: { name, text } }
 POST …                    ← { logSummaryMaxChars: 400 }           改配置
 POST …?session=<id>       ← { file: { scope, fileName, kind, newFileName?, desc?, format?, injectIgnore?, nodes, newNodes?, removed? } }
 POST …?session=<id>       ← { create: { scope, kind, fileName } }
 POST …?session=<id>       ← { remove: { scope, kind, fileName } }
+POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove', name, text? } }
 ```
 
-- POST 带 `file` 走 `runtime.patchFile()`（落盘前用读到的哈希做乐观锁）；带 `create` / `remove` 走 `createFile()` / `deleteFile()`。
+- POST 带 `file` 走 `runtime.patchFile()`（落盘前用读到的哈希做乐观锁）；带 `create` / `remove` 走 `createFile()` / `deleteFile()`；带 `preset` 走 `setPreset()` / `createPreset()` / `savePreset()` / `removePreset()`，`select` 缺 `?session` 直接 400。
+- `remove` 删掉的正好是 `settings.defaultPreset` 时，路由顺手把它写回 `''`（先落盘再改内存）：否则设置页会一直显示一份指不到文件的默认预设。
 - `source` 是磁盘原文，`text` 是 `memory_read` 的返回，`injected` 是提示词里的形状，`meta` + `tree` 是画卡片的结构（浏览器不解析 YAML）。
 - 设置写回走 `saveConfigValue()`：按 `key:` 逐行改，注释和其他键原样保留（不 parse 再序列化）。
 - 请求体坏了、字段不对、方法不对，路由自己回 JSON 错误（400/405/500），不往上抛。
@@ -224,11 +245,11 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 
 ## 13. 配置
 
-`lib/config-schema.js` 的 `CONFIG_FIELDS` 是**唯一事实来源**，同时喂给三处：`index.js` 的 Schemastery `Config`、设置路由的校验、`ui/client.js` 的控件。加一个配置项只有两步——`CONFIG_FIELDS` 加一条，`ui/client.js` 的 `DICTIONARIES` 补 `field.<key>` / `hint.<key>` 两句文案。
+`lib/config-schema.js` 的 `CONFIG_FIELDS` 是**唯一事实来源**，同时喂给三处：`index.js` 的 Schemastery `Config`、设置路由的校验、`ui/client.js` 的控件。加一个配置项只有两步——`CONFIG_FIELDS` 加一条，`ui/client.js` 的 `DICTIONARIES` 补 `field.<key>` / `hint.<key>` 两句文案。标了 `hidden: true` 的项不画通用输入框（`defaultPreset` 就是），由面板自己放一个语义合适的控件。
 
 优先级：`config.yaml` > profile 插件配置 > 内置默认值。合并前只挑字段表认识的键（手写的旧键不会把整份配置带崩），合并后再用同一份 schema 校验一次，不合法就 warning + 默认值。
 
-**目录不可配置**：`resolveLayout()` 只读环境（`DSH_HOME`，没有就是 `~/.dsh`），Global 在 `<home>/dsh-memory/.memory`，工作区在 `<workspace>/.memory`。早期这几个是可配置的，删掉是因为一个写错的路径会让插件安静地读到一份空记忆。要换位置就改 `DSH_HOME`。
+**目录不可配置**：`resolveLayout()` 只读环境（`DSH_HOME`，没有就是 `~/.dsh`），Global 在 `<home>/dsh-memory/.memory`，工作区在 `<workspace>/.memory`，预设目录在 `<home>/dsh-memory/preset`。早期这几个是可配置的，删掉是因为一个写错的路径会让插件安静地读到一份空记忆。要换位置就改 `DSH_HOME`。
 
 ## 14. 扩展点
 
@@ -239,11 +260,10 @@ POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 - **加工具**：`defineTool()` 已含参数校验、agent 检查、错误包装、`presentCall`，新工具只写 `name/description/properties/run/present`。
 - **改日志形状**：`log.js` 的 `LOG_MAX_DEPTH` / `parseLogEntryTitle` / `assertLogTitle` 是全部形状规则；`isLogDate()` 是唯一日期判定点，`parseLogDateQuery()` 是唯一日期查询解析点。
 
-规划中但没做的三件事（用户已在 [README](./README.md#近期目标) 里定了优先级，别擅自提前实现）：
+规划中但没做的两件事（用户已在 [README](./README.md#近期目标) 里定了优先级，别擅自提前实现）：
 
 1. **关键词召回** —— 它和不变量 2（前缀按会话冻结）**天然冲突**：召回结果随话题变，注入文本一改缓存全废。要做得在会话开始 / 快照重建那一刻召一次、结果跟快照一起冻结，不是每轮召回。落地前先把"省下的 token vs 打掉缓存的钱"算清楚。
-2. **人设预设** —— 会话级前缀，走同一套冻结。难点是接入口：新建会话是宿主动作，插件目前只有 `conversation.view` 一个落点。
-3. **定时/定频注入** —— 倾向追加到对话（像通知那样不唤醒），不要改系统提示词，否则又是在动前缀。
+2. **定时/定频注入** —— 倾向追加到对话（像通知那样不唤醒），不要改系统提示词，否则又是在动前缀。
 
 ## 15. 约定与坑
 

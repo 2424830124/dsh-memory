@@ -1,7 +1,7 @@
 {
   "name": "@huai_xin/dsh-memory",
-  "version": "0.1.4",
-  "description": "Cross-session long-term memory for DeepSeek Harness: YAML memory notebooks injected into the prompt, read and edited by the model, and kept in sync across sessions.",
+  "version": "0.2.0",
+  "description": "Cross-session long-term memory and per-session presets for DeepSeek Harness: YAML memory notebooks injected into the prompt, read and edited by the model, kept in sync across sessions, plus Markdown presets that replace the harness identity.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -15,6 +15,7 @@
     "index.js",
     "ui/*.js",
     "lib/*.js",
+    "presets/*.md",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -30,6 +31,7 @@
     "memory",
     "long-term-memory",
     "prompt-injection",
+    "preset",
     "yaml"
   ],
   "repository": {
@@ -49,6 +51,7 @@
     "dump": "node test/dump.mjs"
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5",
     "yaml": "^2.9.0"
   },
   "dsh": {

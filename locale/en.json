@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Long-Term Memory",
-    "description": "YAML memory notebooks injected into the prompt and shared across sessions, with read/edit/manage tools and change notices."
+    "title": "Long-Term Memory & Presets",
+    "description": "YAML memory notebooks injected into the prompt and shared across sessions, plus Markdown presets that replace the harness identity, with read/edit/manage tools and change notices."
   }
 }

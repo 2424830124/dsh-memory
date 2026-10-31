@@ -11,6 +11,8 @@ import { join } from 'node:path'
 import { CONFIG_FILE_NAME, loadConfigFile } from '../lib/config.js'
 import { parseDocument } from '../lib/document.js'
 import { resolveLayout } from '../lib/paths.js'
+import { PresetStore } from '../lib/preset.js'
+import { seedPresets } from '../lib/seed-presets.js'
 import { MemoryStore } from '../lib/store.js'
 import { MemoryRuntime } from '../lib/runtime.js'
 import { renderInjection } from '../lib/render.js'
@@ -364,6 +366,10 @@ await check('配置文件落在 <dataDir>/config.yaml：缺了不报、坏了整
   await mkdir(layout.dataDir, { recursive: true })
   await writeFile(file, 'injectLog: true\nfileOrder:\n  - 我的记忆\n', 'utf8')
   assert.deepEqual(loadConfigFile(file, warn), { injectLog: true, fileOrder: ['我的记忆'] })
+
+  // 手写 YAML 常把文件名写成裸数字：统一成字符串，别让整份配置跟着校验失败。
+  await writeFile(file, 'fileOrder: [2, 1]\n', 'utf8')
+  assert.deepEqual(loadConfigFile(file, warn), { fileOrder: ['2', '1'] })
 
   await writeFile(file, 'injectLog: [oops\n', 'utf8')
   assert.deepEqual(loadConfigFile(file, warn), {})
@@ -1112,6 +1118,204 @@ await check('update_at 落盘是本地时间，带上时区偏移', async () => 
   const expected = `${offset < 0 ? '-' : '+'}${String(Math.abs(Math.trunc(offset / 60))).padStart(2, '0')}:${String(Math.abs(offset % 60)).padStart(2, '0')}`
   assert.ok(stamp.endsWith(expected), `偏移要是本机时区 ${expected}`)
 
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('预设目录：md 去掉扩展名，按文件名排序，别的文件不算', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-preset-'))
+  await writeFile(join(dir, '乙.md'), '乙预设', 'utf8')
+  await writeFile(join(dir, '甲.md'), '甲预设', 'utf8')
+  await writeFile(join(dir, '说明.txt'), '不是预设', 'utf8')
+  const presets = new PresetStore({ dir, warn: (message) => console.log(`       warn: ${message}`) })
+  await presets.start()
+  assert.deepEqual(presets.names(), ['甲', '乙'])
+  assert.equal(presets.text('甲'), '甲预设')
+  assert.equal(presets.text('不存在'), '')
+  assert.equal(presets.has('乙'), true)
+  presets.dispose()
+  await rm(dir, { recursive: true, force: true })
+})
+
+await check('预设热加载：改文件、删文件都直接反映，不用重启', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-preset-hot-'))
+  const file = join(dir, '角色.md')
+  await writeFile(file, '第一版', 'utf8')
+  const presets = new PresetStore({ dir, warn: (message) => console.log(`       warn: ${message}`) })
+  await presets.start()
+  assert.equal(presets.text('角色'), '第一版')
+
+  await writeFile(file, '第二版', 'utf8')
+  await presets.reload()
+  assert.equal(presets.text('角色'), '第二版')
+
+  // 监听器那条路也走一遍：防抖之后自己会重读，调用方不用等重启。
+  await writeFile(file, '第三版', 'utf8')
+  presets.scheduleReload()
+  await new Promise((resolve) => setTimeout(resolve, 350))
+  assert.equal(presets.text('角色'), '第三版')
+
+  // 删掉之后文本立刻变成空串：调用方据此回退到宿主的原生 identity。
+  await rm(file, { force: true })
+  await presets.reload()
+  assert.equal(presets.text('角色'), '')
+  assert.deepEqual(presets.names(), [])
+  presets.dispose()
+  await rm(dir, { recursive: true, force: true })
+})
+
+await check('预设新建、保存、删除都落盘，重名和非法名字被拒绝', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-memory-preset-write-'))
+  const presets = new PresetStore({ dir, warn: (message) => console.log(`       warn: ${message}`) })
+  await presets.start()
+
+  assert.equal(await presets.create('角色'), '角色')
+  assert.equal(presets.has('角色'), true)
+  assert.equal(presets.text('角色'), '')
+  await assert.rejects(() => presets.create('角色'), /已经有名为「角色」的预设/)
+  await assert.rejects(() => presets.create('守则/旧'), /预设名字里不能包含/)
+
+  assert.equal(await presets.save('角色', '开场白第一行\n第二行'), '角色')
+  assert.equal(presets.text('角色'), '开场白第一行\n第二行')
+
+  // 保存不存在的名字会新建：另一个窗口删掉的文件也能从开着的编辑器写回来。
+  await presets.save('临时', '草稿')
+  assert.equal(presets.text('临时'), '草稿')
+
+  assert.equal(await presets.remove('临时'), '临时')
+  assert.equal(presets.has('临时'), false)
+  await assert.rejects(() => presets.remove('临时'), /没有名为「临时」的预设/)
+
+  presets.dispose()
+  await rm(dir, { recursive: true, force: true })
+})
+
+await check('内置预设只在第一次出现：不覆盖同名文件，删掉的不会自己回来', async () => {
+  const source = await mkdtemp(join(tmpdir(), 'dsh-memory-seed-src-'))
+  const target = await mkdtemp(join(tmpdir(), 'dsh-memory-seed-dst-'))
+  const state = await mkdtemp(join(tmpdir(), 'dsh-memory-seed-state-'))
+  await writeFile(join(source, '甲.md'), '内置甲', 'utf8')
+  await writeFile(join(source, '乙.md'), '内置乙', 'utf8')
+  await writeFile(join(source, '说明.txt'), '不是预设', 'utf8')
+
+  // 用户自己已经有一份同名的：保留用户的，不覆盖。
+  await writeFile(join(target, '甲.md'), '我自己的甲', 'utf8')
+  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), ['乙'])
+  assert.equal(await readFile(join(target, '甲.md'), 'utf8'), '我自己的甲')
+  assert.equal(await readFile(join(target, '乙.md'), 'utf8'), '内置乙')
+
+  // 第二次启动什么都不做。
+  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), [])
+
+  // 删掉内置的那份，再启动不会被重新种回来。
+  await rm(join(target, '乙.md'), { force: true })
+  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), [])
+  await assert.rejects(() => readFile(join(target, '乙.md'), 'utf8'), /ENOENT/)
+
+  // 新版本新增的内置预设仍会补上。
+  await writeFile(join(source, '丙.md'), '内置丙', 'utf8')
+  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), ['丙'])
+
+  await rm(source, { recursive: true, force: true })
+  await rm(target, { recursive: true, force: true })
+  await rm(state, { recursive: true, force: true })
+})
+
+await check('预设按会话选择并持久化：空选择回退原生 identity，重开还是同一份', async () => {
+  const { store, workspace } = await sandbox()
+  const dir = join(store.dataDir, 'preset')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, '角色.md'), '我是角色预设', 'utf8')
+  const presets = new PresetStore({ dir, warn: (message) => console.log(`       warn: ${message}`) })
+  await presets.start()
+
+  const make = () => new MemoryRuntime({
+    store,
+    presets,
+    config: {
+      snapshotTtlMinutes: 0,
+      workingDirectory: { ensure: async (agent) => agent.workspace ?? workspace },
+    },
+    logger: { warn: (message) => console.log(`       warn: ${message}`) },
+  })
+
+  const runtime = make()
+  const agent = fakeAgent('preset-session', workspace)
+  await runtime.attach(agent)
+  assert.equal(runtime.presetText({ agent }), '', '没选预设时什么都不注入')
+  assert.deepEqual(runtime.presetOverview('preset-session'), { names: ['角色'], selected: '' })
+
+  await runtime.setPreset(agent, '角色')
+  assert.equal(runtime.presetText({ agent }), '我是角色预设')
+  assert.deepEqual(runtime.presetOverview('preset-session'), { names: ['角色'], selected: '角色' })
+  await assert.rejects(() => runtime.setPreset(agent, '不存在'), /没有名为「不存在」的预设/)
+
+  // 重建 runtime（模拟重启）后 attach，还能从 state 目录读回同一份选择。
+  const restarted = make()
+  await restarted.attach(fakeAgent('preset-session', workspace))
+  assert.equal(restarted.presetText({ agent: fakeAgent('preset-session', workspace) }), '我是角色预设')
+
+  // 删除预设会把引用它的会话选择一并清掉，下一次组装回到原生 identity。
+  assert.equal(await restarted.removePreset('角色'), '角色')
+  assert.equal(restarted.presetText({ agent: fakeAgent('preset-session', workspace) }), '')
+  assert.deepEqual(restarted.presetOverview('preset-session'), { names: [], selected: '' })
+
+  presets.dispose()
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('设置里的默认预设：新会话 attach 时套用，已选过的会话不被改写', async () => {
+  const { store, workspace } = await sandbox()
+  const dir = join(store.dataDir, 'preset')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, '角色.md'), '我是角色预设', 'utf8')
+  const presets = new PresetStore({ dir, warn: (message) => console.log(`       warn: ${message}`) })
+  await presets.start()
+
+  const make = (defaultPreset) => new MemoryRuntime({
+    store,
+    presets,
+    config: {
+      defaultPreset,
+      snapshotTtlMinutes: 0,
+      workingDirectory: { ensure: async (agent) => agent.workspace ?? workspace },
+    },
+    logger: { warn: (message) => console.log(`       warn: ${message}`) },
+  })
+
+  const runtime = make('角色')
+  const agent = fakeAgent('default-session', workspace)
+  await runtime.attach(agent)
+  assert.equal(runtime.presetName(agent), '角色', '没有选择文件的新会话套用默认预设')
+  assert.equal(runtime.presetText({ agent }), '我是角色预设')
+
+  // 默认值后来被清掉，已经带上默认预设的会话还是原来那份：它已经有自己的选择文件了。
+  const later = make('')
+  await later.attach(fakeAgent('default-session', workspace))
+  assert.equal(later.presetText({ agent: { id: 'default-session' } }), '我是角色预设')
+
+  // 新会话在默认值清空后回到原生 identity。
+  const fresh = fakeAgent('fresh-session', workspace)
+  await later.attach(fresh)
+  assert.equal(later.presetName(fresh), '')
+
+  // 默认值指向一个已经被删掉的名字：安静地当作没有，不要报错。
+  const missing = make('不存在')
+  const orphan = fakeAgent('orphan-session', workspace)
+  await missing.attach(orphan)
+  assert.equal(missing.presetName(orphan), '')
+
+  // 子 agent 也走 attach，但不能被换成用户的人设：它是被派出去干活的。
+  const child = fakeAgent('child-session', workspace)
+  child.session.header.origin = 'subagent'
+  const childRuntime = make('角色')
+  await childRuntime.attach(child)
+  assert.equal(childRuntime.presetName(child), '')
+
+  presets.dispose()
   store.dispose()
   await rm(workspace, { recursive: true, force: true })
   await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})

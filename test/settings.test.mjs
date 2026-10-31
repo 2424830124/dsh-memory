@@ -113,6 +113,24 @@ try {
     assert.ok(body.injectIgnoreOptions.includes('update_at'))
     assert.ok(body.injectIgnoreOptions.includes('t1.desc'))
     assert.ok(!body.injectIgnoreOptions.includes('t9.desc'))
+    const defaultPreset = body.fields.find((field) => field.key === 'defaultPreset')
+    assert.equal(defaultPreset.hidden, true, '默认预设由下拉维护，不该再给输入框')
+    assert.equal(defaultPreset.group, 'preset')
+  })
+
+  await check('POST 默认预设：存名字，也存得下清空', async () => {
+    const runtime = runtimeStub(180)
+    const handler = createSettingsHandler({ file, runtime })
+    const chosen = await call(handler, 'POST', JSON.stringify({ defaultPreset: '角色' }))
+    assert.equal(chosen.status, 200)
+    assert.equal(chosen.body.settings.defaultPreset, '角色')
+    assert.equal(runtime.config.defaultPreset, '角色')
+    assert.match(await readFile(file, 'utf8'), /^defaultPreset: 角色$/m)
+
+    const cleared = await call(handler, 'POST', JSON.stringify({ defaultPreset: '' }))
+    assert.equal(cleared.status, 200)
+    assert.equal(cleared.body.settings.defaultPreset, '')
+    assert.equal(runtime.config.defaultPreset, '')
   })
 
   await check('GET 带上各作用域当前的记忆文件', async () => {
@@ -352,6 +370,80 @@ try {
     const handler = createSettingsHandler({ file, runtime })
     const { status } = await call(handler, 'POST', JSON.stringify({ file: { scope: 'Global', fileName: '没有这个' } }))
     assert.equal(status, 404)
+  })
+
+  await check('预设：GET 带清单与选中项，?preset= 带文本', async () => {
+    const runtime = runtimeStub(180)
+    runtime.presetOverview = (sessionId) => ({ names: ['角色', '守则'], selected: sessionId === 's1' ? '角色' : '' })
+    runtime.presetContent = (name) => (name === '角色' ? '我是角色' : '')
+    const handler = createSettingsHandler({ file, runtime })
+
+    const list = await call(handler, 'GET', undefined, '/plugins/dsh-memory/settings?session=s1')
+    assert.deepEqual(list.body.presets, { names: ['角色', '守则'], selected: '角色' })
+
+    const one = await call(handler, 'GET', undefined, '/plugins/dsh-memory/settings?session=s1&preset=%E8%A7%92%E8%89%B2')
+    assert.deepEqual(one.body.preset, { name: '角色', text: '我是角色' })
+  })
+
+  await check('预设：POST select / create / save / remove 各走各的入口', async () => {
+    const seen = []
+    const runtime = runtimeStub(180)
+    runtime.setPreset = async (agent, name) => {
+      seen.push(['select', agent.id, name])
+      return name
+    }
+    runtime.createPreset = async (name) => {
+      seen.push(['create', name])
+      return name
+    }
+    runtime.savePreset = async (name, text) => {
+      seen.push(['save', name, text])
+      return name
+    }
+    runtime.removePreset = async (name) => {
+      seen.push(['remove', name])
+      return name
+    }
+    const handler = createSettingsHandler({ file, runtime })
+    const url = '/plugins/dsh-memory/settings?session=s1'
+
+    const selected = await call(handler, 'POST', JSON.stringify({ preset: { op: 'select', name: '角色' } }), url)
+    assert.equal(selected.status, 200)
+    assert.equal((await call(handler, 'POST', JSON.stringify({ preset: { op: 'create', name: '新角色' } }), url)).status, 200)
+    assert.equal((await call(handler, 'POST', JSON.stringify({ preset: { op: 'save', name: '角色', text: '正文' } }), url)).status, 200)
+    assert.equal((await call(handler, 'POST', JSON.stringify({ preset: { op: 'remove', name: '新角色' } }), url)).status, 200)
+
+    assert.deepEqual(seen, [
+      ['select', 's1', '角色'],
+      ['create', '新角色'],
+      ['save', '角色', '正文'],
+      ['remove', '新角色'],
+    ])
+
+    // 没有会话就没有「本会话选中谁」这回事。
+    const noSession = await call(handler, 'POST', JSON.stringify({ preset: { op: 'select', name: '角色' } }))
+    assert.equal(noSession.status, 400)
+  })
+
+  await check('预设：删掉设置里的默认预设时，默认值跟着回到「不使用」', async () => {
+    const runtime = runtimeStub(180)
+    runtime.config.defaultPreset = '角色'
+    runtime.removePreset = async (name) => name
+    runtime.presetOverview = () => ({ names: [], selected: '' })
+    const handler = createSettingsHandler({ file, runtime })
+
+    const removed = await call(handler, 'POST', JSON.stringify({ preset: { op: 'remove', name: '角色' } }),
+      '/plugins/dsh-memory/settings?session=s1')
+    assert.equal(removed.status, 200)
+    assert.equal(runtime.config.defaultPreset, '')
+    assert.equal(removed.body.settings.defaultPreset, '')
+    assert.match(await readFile(file, 'utf8'), /^defaultPreset: ""$/m)
+
+    // 删的是别的预设，默认值不动。
+    runtime.config.defaultPreset = '守则'
+    await call(handler, 'POST', JSON.stringify({ preset: { op: 'remove', name: '角色' } }),
+      '/plugins/dsh-memory/settings?session=s1')
+    assert.equal(runtime.config.defaultPreset, '守则')
   })
 
   await check('路由常量与客户端调用的一致', async () => {

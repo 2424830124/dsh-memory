@@ -4,12 +4,10 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    // 宿主的界面组件：按钮、输入框、开关、分段控件、图标和 markdown 渲染器。
-    // 用它们而不是自己画，字号、圆角、悬停和焦点才和宿主其余界面一致；
-    // 注入效果的预览也直接交给宿主的 markdown 渲染器（带代码高亮和链接策略）。
+    // 宿主的界面组件：按钮、输入框、开关、分段控件、菜单和图标。
+    // 用它们而不是自己画，字号、圆角、悬停和焦点才和宿主其余界面一致。
+    // 注入效果的预览不经过宿主：`injectedPreview()` 自己按行画（见本文件）。
     const UI = require('@deepseek-ai/dsh-client-ui-primitives')
-    // 宿主导出的是 `React.memo(...)` 的产物，typeof 是 'object' 而不是 'function'，
-    // 所以这里只能判空，不能判类型——按类型判会让预览永远退回纯文本。
 
     /** Locale namespace for this panel's text. */
     const NS = 'dsh-memory.settings'
@@ -21,6 +19,7 @@ window.__ModuleLoader__.load({
       zh: {
         tab: '记忆',
         title: '记忆',
+        'view.presets': '预设',
         'view.global': '全局',
         'view.workspace': '工作区',
         'view.settings': '设置',
@@ -67,7 +66,38 @@ window.__ModuleLoader__.load({
         'file.deleteNo': '取消',
         'file.deleted': '已删除',
         'pick.hint': '选一个文件看它长什么样',
-        'settings.sub': '改动即时生效，标了「重启后生效」的除外',
+        'presets.title': '预设',
+        'presets.sub': '整体替换提示词最开头的身份',
+        'presets.inUse': '使用中',
+        'presets.use': '使用',
+        'presets.defaultIdentity': 'DSH 默认身份',
+        'presets.defaultHint': '不使用预设时，提示词开头保留宿主原生的 harness identity。',
+        'presets.switchWarning': '可能破坏前缀缓存',
+        'presets.switchConfirm': '确认切换',
+        'presets.switchCancel': '取消',
+        'presets.edit': '修改',
+        'presets.preview': '预览',
+        'presets.create': '新建预设',
+        'presets.createName': '预设名字',
+        'presets.created': '已新建',
+        'presets.seat': '预设',
+        'presets.none': '不使用预设',
+        'presets.delete': '删除',
+        'presets.deleteYes': '删除',
+        'presets.deleteNo': '取消',
+        'presets.empty': '还没有预设',
+        'presets.pick': '选一份预设。',
+        'presets.pickHint': '点「使用」并确认后，这份预设才会整体替换提示词最开头的 harness identity；切换会作废一次前缀缓存，所以要先确认。',
+        'presets.save': '保存',
+        'presets.saving': '保存中…',
+        'presets.unsaved': '有未保存的修改',
+        'presets.loading': '读取中…',
+        'presets.hint': '保存后下一次请求生效；直接改目录里的 .md 约 200ms 自动重载。',
+        'presets.selected': '已切换，下一次模型请求生效',
+        'presets.defaultOn': '已切回 DSH 默认身份，下一次模型请求生效',
+        'presets.deleted': '已删除',
+        'presets.failed': '预设保存失败',
+        'settings.sub': '改动即时生效',
         changed: '有 %s 项改动',
         save: '保存',
         saving: '保存中…',
@@ -76,10 +106,12 @@ window.__ModuleLoader__.load({
         failed: '保存失败',
         loading: '读取中…',
         nothing: '没有改动',
-        restart: '重启后生效',
         'group.inject': '注入',
         'group.session': '会话',
         'group.log': '日志',
+        'group.preset': '预设',
+        'field.defaultPreset': '新会话默认预设',
+        'hint.defaultPreset': '新建的会话自动从这份预设开始；选「不使用预设」就用原生身份。只影响之后新开的会话，已经选过预设的会话不会被改动',
         'field.snapshotTtlMinutes': '快照保留分钟',
         'hint.snapshotTtlMinutes': '会话多久没动静就丢掉快照、下次发消息重新生成。前缀缓存一般 5–60 分钟，按供应商的规则调；0 表示一直留着',
         'field.logSummaryMaxChars': '日志摘要字数上限',
@@ -103,6 +135,7 @@ window.__ModuleLoader__.load({
         'view.global': 'Global',
         'view.workspace': 'Workspace',
         'view.settings': 'Settings',
+        'view.presets': 'Presets',
         'scope.empty': 'No memory files yet',
         'browse.sub': 'Pick a file on the left; see it on disk and injected on the right',
         'rail.memory': 'Files',
@@ -145,7 +178,38 @@ window.__ModuleLoader__.load({
         'file.deleteNo': 'Cancel',
         'file.deleted': 'Deleted',
         'pick.hint': 'Pick a file to see what it looks like',
-        'settings.sub': 'Changes apply immediately, except those marked restart',
+        'presets.title': 'Presets',
+        'presets.sub': 'Replaces the identity at the very start of the prompt',
+        'presets.inUse': 'In use',
+        'presets.use': 'Use',
+        'presets.defaultIdentity': 'DSH default identity',
+        'presets.defaultHint': 'With no preset, the prompt keeps the native harness identity from the host.',
+        'presets.switchWarning': 'May break the prefix cache',
+        'presets.switchConfirm': 'Switch',
+        'presets.switchCancel': 'Cancel',
+        'presets.edit': 'Edit',
+        'presets.preview': 'Preview',
+        'presets.create': 'New preset',
+        'presets.createName': 'Preset name',
+        'presets.created': 'Created',
+        'presets.seat': 'Preset',
+        'presets.none': 'No preset',
+        'presets.delete': 'Delete',
+        'presets.deleteYes': 'Delete',
+        'presets.deleteNo': 'Cancel',
+        'presets.empty': 'No presets yet',
+        'presets.pick': 'Pick a preset.',
+        'presets.pickHint': 'Press “Use” and confirm to replace the harness identity at the very start of the prompt; switching drops the prefix cache once, hence the confirmation.',
+        'presets.save': 'Save',
+        'presets.saving': 'Saving…',
+        'presets.unsaved': 'Unsaved changes',
+        'presets.loading': 'Loading…',
+        'presets.hint': 'Takes effect on the next request; edits to the .md files reload after ~200ms.',
+        'presets.selected': 'Switched — effective on the next model request',
+        'presets.defaultOn': 'Back to the DSH default identity — effective on the next model request',
+        'presets.deleted': 'Deleted',
+        'presets.failed': 'Could not save the preset',
+        'settings.sub': 'Changes apply immediately',
         changed: '%s pending',
         save: 'Save',
         saving: 'Saving…',
@@ -154,10 +218,12 @@ window.__ModuleLoader__.load({
         failed: 'Save failed',
         loading: 'Loading…',
         nothing: 'Nothing changed',
-        restart: 'Takes effect after a restart',
         'group.inject': 'Injection',
         'group.session': 'Session',
         'group.log': 'Log',
+        'group.preset': 'Presets',
+        'field.defaultPreset': 'Default preset for new sessions',
+        'hint.defaultPreset': 'New sessions start from this preset; pick “No preset” to keep the native identity. Only affects sessions started afterwards — sessions that already picked one are left alone',
         'field.snapshotTtlMinutes': 'Snapshot retention (minutes)',
         'hint.snapshotTtlMinutes':
             'Drop a session snapshot after this much idle time and rebuild it on the next message. Provider prefix caches usually last 5–60 minutes; 0 keeps snapshots forever',
@@ -405,18 +471,7 @@ window.__ModuleLoader__.load({
       color: 'var(--dsw-alias-label-tertiary)',
     }
 
-    /** The little "restart" note beside a label. */
-    const restartStyle = {
-      flex: '0 0 auto',
-      padding: '0 6px',
-      borderRadius: 4,
-      fontSize: 11,
-      lineHeight: '16px',
-      color: 'var(--dsw-alias-label-tertiary)',
-      background: 'var(--dsw-alias-bg-layer-2)',
-    }
-
-    /** Muted text: hints, the restart note, the loading line. */
+    /** Muted text: hints and the loading line. */
     const textStyle = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' }
 
     /** The two columns: file names on the left, the picked file on the right. */
@@ -455,6 +510,40 @@ window.__ModuleLoader__.load({
       overflowY: 'auto',
       flex: '1 1 auto',
       minHeight: 0,
+    }
+
+    // 「新建文件」和「新建预设」是同一个控件，样式只在这里写一份。
+    /** The dashed "new file / new preset" button at the top of a rail. */
+    const createButtonStyle = {
+      font: 'inherit',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      width: '100%',
+      padding: '4px 8px',
+      fontSize: 12,
+      lineHeight: '18px',
+      background: 'transparent',
+      border: '1px dashed var(--dsw-alias-border-l1)',
+      borderRadius: 6,
+      color: 'var(--dsw-alias-label-secondary)',
+      cursor: 'pointer',
+    }
+
+    /** The inline name input that replaces the button while creating. */
+    const createInputStyle = {
+      font: 'inherit',
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '4px 8px',
+      fontSize: 12,
+      lineHeight: '18px',
+      color: 'var(--dsw-alias-label-primary)',
+      background: 'var(--dsw-alias-bg-layer-2)',
+      border: '1px solid var(--dsw-alias-brand-primary)',
+      borderRadius: 6,
+      outline: 'none',
     }
 
     /**
@@ -734,7 +823,7 @@ window.__ModuleLoader__.load({
 
     // ── 原文面板：元数据卡片 + 标题树卡片 ─────────────────────────────────
     // 面板把「这个文件长什么样」按结构画出来，而不是丢一整段 YAML 给人看。
-    // 全部只读：写入走工具，界面只负责看得清。
+    // 卡片是可编辑草稿：元数据与各级标题各自「保存」，写入仍由 `saveFile()` 走设置路由。
 
     /**
      * The scroll column that holds the pane head, the metadata card and the heading cards.
@@ -771,7 +860,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * A row of small labels: keywords, injection switches.
+     * A row of small labels: keywords and `inject_ignore` chips.
      *
      * 一行说完：换行会让标签和它的值分家（标签一行、chip 一行），看着像两段；
      * 真放不下就横向滚动，而不是往下堆。
@@ -824,7 +913,7 @@ window.__ModuleLoader__.load({
       cursor: 'pointer',
     }
 
-    /** The square that opens a picker: same height as a chip. */
+    /** The square that deletes a heading card: same height as a chip. */
     const deleteButtonStyle = {
       ...squareButtonStyle,
       flex: '0 0 auto',
@@ -873,7 +962,7 @@ window.__ModuleLoader__.load({
       display: 'inline-flex',
     }
 
-    /** The group label inside the picker. */
+    /** The one-line notice inside the picker when nothing is selectable. */
     const pickerGroupStyle = {
       flex: '0 0 auto',
       minWidth: 58,
@@ -982,7 +1071,10 @@ window.__ModuleLoader__.load({
       color: 'var(--dsw-alias-label-tertiary)',
     }
 
-    /** How deep headings may nest: `lib/model.js` 的 `LEVELS` 有四级。 */
+    /**
+     * How deep headings may nest. Must track `lib/model.js` 的 `LEVELS`:
+     * 加一级时这里要一起改，否则浏览器侧会停在旧深度，界面上再也加不出新的一级。
+     */
     const MAX_DEPTH = 4
 
     const previewTextStyle = {
@@ -1062,9 +1154,8 @@ window.__ModuleLoader__.load({
     /**
      * POST one JSON body and read the JSON answer.
      *
-     * 三处 POST（改设置、新建/删除文件、保存文件）的错误处理完全一样：解析失败就当空
-     * 对象，非 2xx 时优先用服务端给的 `error`，没有才退回状态码。放在这里，免得三份
-     * 抄得不一样。
+     * 所有 POST（改设置、文件增删、保存文件、预设增删改选）都走这里：解析失败就当空
+     * 对象，非 2xx 时优先用服务端给的 `error`，没有才退回状态码。免得各写一份。
      *
      * @param {string} target - the URL to post to.
      * @param {object} payload - the body to serialize.
@@ -1174,8 +1265,27 @@ window.__ModuleLoader__.load({
       const [pickerRect, setPickerRect] = React.useState(null)
       // 不注入项菜单里展开的那一层：{ level, rect }。悬停某层右侧浮出「更新时间/关键词/正文」。
       const [submenu, setSubmenu] = React.useState(null)
+      // 预设页签：清单与当前会话的选择随 `/settings` 回来，正文按需单独取——
+      // 预设是一整段开头文本，没必要每次刷新都全量传。
+      const [presets, setPresets] = React.useState({ names: [], selected: '' })
+      const [presetPicked, setPresetPicked] = React.useState(null)
+      const [presetText, setPresetText] = React.useState('')
+      const [presetDraft, setPresetDraft] = React.useState('')
+      const [presetLoading, setPresetLoading] = React.useState(false)
+      const [presetError, setPresetError] = React.useState(null)
+      const [presetBusy, setPresetBusy] = React.useState(false)
+      const [presetNote, setPresetNote] = React.useState(null)
+      const [presetCreating, setPresetCreating] = React.useState(false)
+      const [presetCreateText, setPresetCreateText] = React.useState('')
+      // 正在等确认的切换目标：null = 没在切换，'' = 切回 DSH 默认身份。
+      const [presetSwitchTarget, setPresetSwitchTarget] = React.useState(null)
+      // 设置页签里「新会话默认预设」的下拉：和预设页签的清单共用一个来源。
+      const [defaultPresetOpen, setDefaultPresetOpen] = React.useState(false)
+      const [presetConfirming, setPresetConfirming] = React.useState(null)
+      // 选择、保存、新建、删除都可能被回车与按钮同时触发，和设置表单同一个坑。
+      const presetInFlight = React.useRef(false)
 
-      // 三块渲染代码放在同目录的 client.*.js 里，按需取。主包只留编排、状态和 i18n，
+      // 四块渲染代码放在同目录的 client.*.js 里，按需取。主包只留编排、状态和 i18n，
       // 免得一个组件两千多行。用 state + effect 而不是 React.lazy，是为了不依赖
       // 宿主有没有包 Suspense 边界；chunk 没到之前先显示加载态。
       const [chunks, setChunks] = React.useState({})
@@ -1186,8 +1296,9 @@ window.__ModuleLoader__.load({
           require.async('./client.settings.js'),
           require.async('./client.file.js'),
           require.async('./client.browse.js'),
-        ]).then(([settings, file, browse]) => {
-          if (live) setChunks({ settings, file, browse })
+          require.async('./client.presets.js'),
+        ]).then(([settings, file, browse, presetsChunk]) => {
+          if (live) setChunks({ settings, file, browse, presets: presetsChunk })
         }).catch((error) => {
           if (live) setStatus({ tone: 'error', text: `${t('failed')}: ${error?.message ?? error}` })
         })
@@ -1281,6 +1392,12 @@ window.__ModuleLoader__.load({
         setValues(nextValues)
         setDraft(nextDraft)
         setScopes(Array.isArray(body?.scopes) ? body.scopes : [])
+        if (body?.presets !== undefined) {
+          setPresets({
+            names: Array.isArray(body.presets?.names) ? body.presets.names : [],
+            selected: typeof body.presets?.selected === 'string' ? body.presets.selected : '',
+          })
+        }
         if (Array.isArray(body?.injectIgnoreOptions)) setIgnoreOptions(body.injectIgnoreOptions)
         if (Array.isArray(body?.injectIgnoreLevels)) setIgnoreLevels(body.injectIgnoreLevels)
         setLoaded(true)
@@ -1389,7 +1506,6 @@ window.__ModuleLoader__.load({
           labelStyle,
           loaded,
           onKeyDown,
-          restartStyle,
           rowStyle,
           rowTextStyle,
           t,
@@ -1470,6 +1586,167 @@ window.__ModuleLoader__.load({
         }
         if (!entries.some((entry) => entry.fileName === picked)) setPicked(entries[0].fileName)
       }, [view, shelf, scopes, picked])
+
+      // 预设页签：清单项先跟当前会话的选择对齐；会话没选就显示第一份，
+      // 一份都没有就空着（右栏显示新建提示）。`''` 是「DSH 默认身份」那一行。
+      React.useEffect(() => {
+        if (view !== 'presets') return
+        if (presetPicked === '') return
+        if (presetPicked !== null && presets.names.includes(presetPicked)) return
+        setPresetPicked(
+          presets.names.includes(presets.selected)
+            ? presets.selected
+            : (presets.names[0] ?? null),
+        )
+      }, [view, presets, presetPicked])
+
+      // 正文按需取：清单里只带名字，点开哪份才读哪份。
+      React.useEffect(() => {
+        if (view !== 'presets' || presetPicked === null || presetPicked === '') {
+          setPresetText('')
+          setPresetDraft('')
+          setPresetLoading(false)
+          setPresetError(null)
+          return
+        }
+        let live = true
+        setPresetLoading(true)
+        setPresetError(null)
+        const target = `${url}${url.includes('?') ? '&' : '?'}preset=${encodeURIComponent(presetPicked)}`
+        getJson(target)
+          .then((body) => {
+            if (!live) return
+            const text = typeof body?.preset?.text === 'string' ? body.preset.text : ''
+            setPresetText(text)
+            setPresetDraft(text)
+          })
+          .catch((error) => {
+            if (live) setPresetError(String(error?.message ?? error))
+          })
+          .finally(() => {
+            if (live) setPresetLoading(false)
+          })
+        return () => {
+          live = false
+        }
+      }, [view, presetPicked, url])
+
+      /**
+       * 一次预设操作：四种 op 都走同一个 POST，服务端回整份清单与选中项。
+       *
+       * @param {object} payload - `{op, name, text?}`.
+       * @returns {Promise<object|null>} the response, or null when it failed.
+       */
+      const postPreset = async (payload) => {
+        if (presetInFlight.current) return null
+        presetInFlight.current = true
+        setPresetBusy(true)
+        setPresetNote(null)
+        try {
+          const body = await postJson(url, { preset: payload })
+          if (body?.presets !== undefined) {
+            setPresets({
+              names: Array.isArray(body.presets?.names) ? body.presets.names : [],
+              selected: typeof body.presets?.selected === 'string' ? body.presets.selected : '',
+            })
+          }
+          return body
+        } catch (error) {
+          setPresetNote({ tone: 'error', text: `${tRef.current('presets.failed')}: ${error?.message ?? error}` })
+          return null
+        } finally {
+          presetInFlight.current = false
+          setPresetBusy(false)
+        }
+      }
+
+      const pickPreset = (name) => {
+        setPresetPicked(name)
+        setPresetSwitchTarget(null)
+        setPresetConfirming(null)
+        setPresetNote(null)
+      }
+
+      /**
+       * 点「使用」：先只记下要换成哪一份（`''` 是 DSH 默认身份）并亮警告，
+       * 确认后才真正写这个会话的选择。不切正在看的这一份——否则草稿会跟着没了。
+       *
+       * @param {string} name - 预设名，`''` 表示回默认身份。
+       */
+      const usePreset = (name) => {
+        if (name === presets.selected) return
+        setPresetSwitchTarget(name)
+        setPresetConfirming(null)
+        setPresetNote(null)
+        if (presetPicked === null && name === '') setPresetPicked('')
+      }
+
+      const cancelPresetSwitch = () => {
+        setPresetSwitchTarget(null)
+      }
+
+      const confirmPresetSwitch = async () => {
+        if (presetSwitchTarget === null) return
+        const body = await postPreset({ op: 'select', name: presetSwitchTarget })
+        if (body === null) return
+        const target = presetSwitchTarget
+        setPresetSwitchTarget(null)
+        setPresetNote({
+          tone: 'ok',
+          text: tRef.current(target === '' ? 'presets.defaultOn' : 'presets.selected'),
+        })
+      }
+
+      const togglePresetCreate = () => {
+        setPresetCreating((open) => !open)
+        setPresetCreateText('')
+        setPresetNote(null)
+      }
+
+      /** Escape / 「取消」：收起新建行，别把已经敲了一半的名字留着。 */
+      const cancelPresetCreate = () => {
+        setPresetCreating(false)
+        setPresetCreateText('')
+        setPresetNote(null)
+      }
+
+      const createPreset = async () => {
+        const name = presetCreateText.trim()
+        if (name === '') return
+        const body = await postPreset({ op: 'create', name, text: '' })
+        if (body === null) return
+        setPresetCreating(false)
+        setPresetCreateText('')
+        setPresetPicked(name)
+        setPresetText('')
+        setPresetDraft('')
+        setPresetNote({ tone: 'ok', text: tRef.current('presets.created') })
+      }
+
+      const savePresetText = async () => {
+        if (presetPicked === null || presetDraft === presetText) return
+        const body = await postPreset({ op: 'save', name: presetPicked, text: presetDraft })
+        if (body === null) return
+        setPresetText(presetDraft)
+        setPresetNote({ tone: 'ok', text: tRef.current('saved') })
+      }
+
+      const togglePresetDelete = (name) => {
+        setPresetConfirming((current) => (current === name ? null : name))
+      }
+
+      const deletePreset = async (name) => {
+        const body = await postPreset({ op: 'remove', name })
+        if (body === null) return
+        setPresetConfirming(null)
+        if (presetSwitchTarget === name) setPresetSwitchTarget(null)
+        if (presetPicked === name) {
+          setPresetPicked(null)
+          setPresetText('')
+          setPresetDraft('')
+        }
+        setPresetNote({ tone: 'ok', text: tRef.current('presets.deleted') })
+      }
 
       /**
        * 整份文件的新建 / 删除。成功后重新拉作用域表，左栏就跟着变。
@@ -2021,6 +2298,8 @@ window.__ModuleLoader__.load({
           UI,
           browserStyle,
           confirming,
+          createButtonStyle,
+          createInputStyle,
           createText,
           creating,
           detail,
@@ -2058,7 +2337,70 @@ window.__ModuleLoader__.load({
         })
       }
 
+      /**
+       * 预设页签：左清单、右纯文本编辑器。清单与选中项随设置一起回来，
+       * 正文按需取；交互全部回主包，chunk 只负责画。
+       */
+      const presetsBody = () => {
+        const chunk = chunks.presets
+        if (chunk === undefined) return placeholder(t('loading'), '')
+        return chunk.renderPresets({
+          UI,
+          h,
+          t,
+          browserStyle,
+          createButtonStyle,
+          createInputStyle,
+          railStyle,
+          railListStyle,
+          railRowStyle,
+          railItemStyle,
+          railItemActiveStyle,
+          railDeleteStyle,
+          railConfirmYesStyle,
+          railConfirmNoStyle,
+          railNameStyle,
+          emptyHintStyle,
+          textStyle,
+          editorStyle,
+          saveButtonStyle,
+          panesStyle,
+          paneStyle,
+          paneHeadStyle,
+          paneCaption,
+          injectedBodyStyle,
+          injectedPreview,
+          placeholder,
+          names: presets.names,
+          selected: presets.selected,
+          picked: presetPicked,
+          loading: presetLoading,
+          error: presetError,
+          note: presetNote,
+          draft: presetDraft,
+          dirty: presetPicked !== null && presetPicked !== '' && presetDraft !== presetText,
+          busy: presetBusy,
+          creating: presetCreating,
+          createText: presetCreateText,
+          switching: presetSwitchTarget !== null,
+          confirming: presetConfirming,
+          onPick: pickPreset,
+          onUse: usePreset,
+          onUseConfirm: confirmPresetSwitch,
+          onUseCancel: cancelPresetSwitch,
+          onCreateToggle: togglePresetCreate,
+          onCreateText: setPresetCreateText,
+          onCreateSubmit: createPreset,
+          onCreateCancel: cancelPresetCreate,
+          onDeleteToggle: togglePresetDelete,
+          onDelete: deletePreset,
+          onDraft: setPresetDraft,
+          onSave: savePresetText,
+        })
+      }
+
       const tabs = [
+        { id: 'presets', text: t('view.presets') },
         { id: 'Global', text: t('view.global') },
         { id: 'Workspace', text: t('view.workspace') },
         { id: 'settings', text: t('view.settings') },
@@ -2069,9 +2411,50 @@ window.__ModuleLoader__.load({
         { id: 'log', text: t('rail.log') },
       ]
 
+      // 设置页签最上面那张卡：默认预设。它的值一选就提交，不等底部的「保存」——
+      // 这个下拉和其余输入框不是同一种东西（无需草稿，也没有「改了没存」这回事）。
+      const defaultPresetValue = typeof values.defaultPreset === 'string' ? values.defaultPreset : ''
+      const defaultPresetLabel = defaultPresetValue === '' ? t('presets.none') : defaultPresetValue
+      const defaultPresetCard = h('section', { key: 'preset-default', style: groupCardStyle },
+        h('h4', { style: groupTitleStyle }, t('group.preset')),
+        h('div', { style: rowStyle },
+          h('div', { style: rowTextStyle },
+            h('span', { style: labelStyle }, t('field.defaultPreset')),
+            h('p', { style: hintStyle }, t('hint.defaultPreset'))),
+          h(UI.Menu, {
+            open: defaultPresetOpen && loaded && !busy,
+            items: [
+              { id: '', label: t('presets.none') },
+              ...presets.names.map((name) => ({ id: name, label: name })),
+            ],
+            selectedId: defaultPresetValue,
+            align: 'end',
+            onClose: () => setDefaultPresetOpen(false),
+            onSelect: (id) => {
+              setDefaultPresetOpen(false)
+              if (id === defaultPresetValue) return
+              void savePatch({ defaultPreset: id })
+            },
+            anchor: h(UI.Button, {
+              variant: 'ghost',
+              size: 'sm',
+              disabled: busy || !loaded,
+              'aria-label': t('field.defaultPreset'),
+              'aria-haspopup': 'menu',
+              'aria-expanded': defaultPresetOpen && !busy,
+              onClick: () => setDefaultPresetOpen((value) => !value),
+              children: h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                defaultPresetLabel,
+                h('span', { style: { display: 'inline-flex', color: 'var(--dsw-alias-label-caption)' } },
+                  h(UI.IconChevronDownOutlineRegular, { size: 12 }))),
+            }),
+          })))
+
       const body = view === 'settings'
         ? [
-            h('div', { key: 'form', style: settingsBodyStyle }, rows),
+            // 默认预设是设置表单里的第一张卡：它得跟着表单一起滚，不能当
+            // 滚动层外面的固定栏——那会让「预设」永远贴在顶上。
+            h('div', { key: 'form', style: settingsBodyStyle }, [defaultPresetCard, ...rows]),
             h('div', { key: 'actions', style: actionsStyle },
               h(UI.Button, {
                 variant: 'primary',
@@ -2091,7 +2474,8 @@ window.__ModuleLoader__.load({
               }, status.text),
               !loaded && status === null && h('span', { style: textStyle }, t('loading'))),
           ]
-        : [h('div', { key: 'browser', style: { display: 'flex', flex: '1 1 auto', minWidth: 0, minHeight: 0 } }, browserBody(view))]
+        : [h('div', { key: 'browser', style: { display: 'flex', flex: '1 1 auto', minWidth: 0, minHeight: 0 } },
+          view === 'presets' ? presetsBody() : browserBody(view))]
 
       return h('div', {
         ref: rootRef,
@@ -2107,7 +2491,9 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 } },
             h('h3', { style: headingStyle }, t('title')),
             h('span', { style: subheadingStyle },
-              view === 'settings' ? t('settings.sub') : directoryOf(view))),
+              view === 'settings'
+                ? t('settings.sub')
+                : (view === 'presets' ? t('presets.sub') : directoryOf(view)))),
           h(UI.SegmentedTabs, {
             items: tabs.map((tab) => ({ value: tab.id, label: tab.text })),
             value: view,
@@ -2115,6 +2501,112 @@ window.__ModuleLoader__.load({
             onChange: (next) => setView(next),
           })),
         ...body)
+    }
+
+    /**
+     * 新会话那行「工作区 / 创造模式」最右边的预设选择。
+     *
+     * 宿主只在有 session 时渲染这个槽，所以拿到 sessionId 就能直接写进那个会话的
+     * 预设状态：会话还没开口，第一条消息组装时 identity 就已经是选中的那份，
+     * 不需要「使用 + 确认」——这里没有上下文可打断，也就没有缓存可毁。
+     */
+    function PresetSeat(props) {
+      const t = props?.t ?? ((key) => key)
+      const session = props?.sessionId === undefined ? undefined : String(props.sessionId)
+      const [choices, setChoices] = React.useState([])
+      const [selected, setSelected] = React.useState('')
+      const [ready, setReady] = React.useState(false)
+      const [open, setOpen] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+      const alive = React.useRef(true)
+
+      React.useEffect(() => {
+        alive.current = true
+        if (session === undefined) return () => { alive.current = false }
+        fetch(`${ROUTE}?session=${encodeURIComponent(session)}`, { headers: { accept: 'application/json' } })
+          .then(async (res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            return res.json()
+          })
+          .then((body) => {
+            if (!alive.current) return
+            setChoices(Array.isArray(body?.presets?.names) ? body.presets.names.slice() : [])
+            setSelected(typeof body?.presets?.selected === 'string' ? body.presets.selected : '')
+          })
+          // 读不到清单就整块不出现：宁可少一个控件，也不要在新建会话那里留个坏按钮。
+          .catch(() => {})
+          .finally(() => { if (alive.current) setReady(true) })
+        return () => { alive.current = false }
+      }, [session])
+
+      // 一份预设都没有时没什么可选，别占着那一行右侧的位置。
+      if (!ready || choices.length === 0) return null
+
+      const items = [
+        { id: '', label: t('presets.none') },
+        ...choices.map((name) => ({ id: name, label: name })),
+      ]
+      const shown = selected === '' ? t('presets.none') : selected
+
+      const pick = (id) => {
+        setOpen(false)
+        if (id === selected || busy) return
+        const previous = selected
+        // 先按点击结果更新，失败再退回去：菜单一关，界面就不该停在旧名字上等回包。
+        setSelected(id)
+        setBusy(true)
+        postJson(`${ROUTE}?session=${encodeURIComponent(session)}`, { preset: { op: 'select', name: id } })
+          .then((body) => {
+            const next = body?.presets?.selected
+            setSelected(typeof next === 'string' ? next : id)
+          })
+          .catch(() => setSelected(previous))
+          .finally(() => setBusy(false))
+      }
+
+      // 照官方 hero 那一行的 seat 复刻：无边框透明按钮、13px/20px、左右 8px、chevron 用 caption 色。
+      const seatStyle = {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        minWidth: 0,
+        minHeight: 28,
+        maxWidth: 'min(100%, 240px)',
+        padding: '0 8px',
+        border: 'none',
+        borderRadius: 'var(--dsw-radius-sm)',
+        background: open ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        fontSize: 13,
+        fontWeight: 500,
+        lineHeight: '20px',
+        whiteSpace: 'nowrap',
+        cursor: busy ? 'default' : 'pointer',
+      }
+      const seatLabelStyle = ellipsisStyle
+      const seatChevronStyle = { display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-label-caption)' }
+
+      return h(UI.Menu, {
+        open: open && !busy,
+        items,
+        selectedId: selected,
+        align: 'end',
+        onClose: () => setOpen(false),
+        onSelect: pick,
+        anchor: h('button', {
+          type: 'button',
+          disabled: busy,
+          'aria-label': t('presets.seat'),
+          'aria-haspopup': 'menu',
+          'aria-expanded': open && !busy,
+          style: seatStyle,
+          onClick: () => setOpen((value) => !value),
+          children: [
+            h('span', { style: seatLabelStyle }, `${t('presets.seat')} · ${shown}`),
+            h('span', { style: seatChevronStyle }, h(UI.IconChevronDownOutlineRegular, { size: 12 })),
+          ],
+        }),
+      })
     }
 
     return {
@@ -2125,6 +2617,13 @@ window.__ModuleLoader__.load({
           setTranslate(ctx.locale.bind(NS))
           return ctx.locale.subscribe(() => setTranslate(ctx.locale.bind(NS)))
         }, 'memory: settings translate')
+        ctx.slots.inject('conversation.hero.options', () => ctx.slots.register({
+          name: 'conversation.hero.options',
+          id: 'memory-preset',
+          order: 40,
+          label: () => translate('presets.seat'),
+          locale: NS,
+        }, PresetSeat))
         ctx.slots.inject('conversation.view', () => ctx.slots.register({
           name: 'conversation.view',
           id: 'memory',

@@ -1,15 +1,18 @@
 # dsh-memory bundle patch.
 #
-# One Host row. The plugin registers a prompt section plus the memory_read,
-# memory_edit and memory_manage tools, and keeps sessions in sync about changes
-# made elsewhere.
+# One Host row. The plugin rewrites the assembled system prompt (memory into the
+# persona prefix, the selected preset into the harness identity), registers the
+# memory_read, memory_edit and memory_manage tools, and keeps sessions in sync
+# about changes made elsewhere.
 #
 # This file only mounts the plugin. Its settings live next to the data they
 # describe, so a broken edit here can never take the plugin down:
 #
 #   ~/.dsh/dsh-memory/config.yaml         plugin configuration
 #   ~/.dsh/dsh-memory/.memory/*.yaml      Global memory files
+#   ~/.dsh/dsh-memory/preset/*.md         presets, one Markdown file each
 #   ~/.dsh/dsh-memory/state/sessions/     per-session delivery snapshots
+#   ~/.dsh/dsh-memory/state/preset/       per-session preset selection
 #   <workspace>/.memory/*.yaml            Workspace memory files
 - insert:
     - id: memory

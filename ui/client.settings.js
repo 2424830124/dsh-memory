@@ -25,7 +25,6 @@ window.__ModuleLoader__.load({
         labelStyle,
         loaded,
         onKeyDown,
-        restartStyle,
         rowStyle,
         rowTextStyle,
         t,
@@ -86,9 +85,7 @@ window.__ModuleLoader__.load({
           style: { ...rowStyle, borderTop: group.rows.length === 0 ? 'none' : '1px solid var(--dsw-alias-border-l1)' },
         },
         h('div', { style: rowTextStyle },
-          h('span', { style: labelStyle },
-            h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' } }, label(field)),
-            field.restart === true && h('span', { style: restartStyle }, t('restart'))),
+          h('span', { style: labelStyle }, label(field)),
           explanation === '' ? null : h('p', { style: hintStyle }, explanation)),
         control(field)))
       }

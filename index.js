@@ -16,13 +16,18 @@
 import z from '@deepseek-ai/schemastery'
 
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { CONFIG_FIELDS, defaultSettings } from './lib/config-schema.js'
 import { CONFIG_FILE_NAME, loadConfigFile } from './lib/config.js'
 import { resolveLayout } from './lib/paths.js'
+import { PRESET_DIR_NAME, PresetStore } from './lib/preset.js'
+import { seedPresets } from './lib/seed-presets.js'
+import { overrideHarnessIdentity, overridePersona } from './lib/prompt-override.js'
 import { MemoryRuntime } from './lib/runtime.js'
 import { SETTINGS_ROUTE, createSettingsHandler } from './lib/settings-route.js'
 import { MemoryStore } from './lib/store.js'
+import { isSubagentAgent } from './lib/subagent.js'
 import { TOOL_NAMES, editTool, manageTool, readTool, renderEditDescription } from './lib/tools.js'
 
 export const name = 'memory'
@@ -111,18 +116,6 @@ function resolveSettings(config, warn) {
 }
 
 /**
- * Whether one agent is a delegated child, which may read but not write memory.
- * @param {object} agent - the live agent.
- * @returns {boolean} whether it is a subagent.
- */
-function isSubagent(agent) {
-  const header = agent?.session?.header
-  if (header?.origin === 'subagent') return true
-  if ((header?.delegationDepth ?? 0) > 0) return true
-  return (agent?.options?.subagentDepth ?? 0) > 0
-}
-
-/**
  * Activate the memory plugin.
  * @param {import('@deepseek-ai/cordis').Context} ctx - the plugin context.
  * @param {object} config - the resolved plugin configuration.
@@ -136,28 +129,24 @@ export function apply(ctx, config) {
     }
   }
 
-  // Schemastery applies the field defaults before `apply` runs; the `??`s only
-  // cover an apply() reached without validation (unit tests build one by hand).
+  // Schemastery applies the field defaults before `apply` runs; resolveSettings
+  // re-checks them so an unvalidated apply() (unit tests build one by hand)
+  // still gets a complete configuration.
   const settings = resolveSettings(config, warn)
-
-  // 注入位置写死：紧跟 harness identity 那句「You are an AI agent …」，排在
-  // persona 前面——也就是提示词最先读到的内容。由宿主的分节序号算出来，不写
-  // 字面量，宿主调整编号时不会跟着错位。取不到就退回 0（persona 之后的头部）。
-  const SECTION_ORDER = (() => {
-    try {
-      const persona = ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX')
-      return Number.isFinite(persona) ? persona - 1 : 0
-    } catch {
-      return 0
-    }
-  })()
 
   // 路径不进配置：`MemoryStore` 自己用 `resolveLayout()` 的默认值（`DSH_HOME` 或
   // `~/.dsh`），这里不传任何目录，免得看起来像还能配。
   const store = new MemoryStore({ warn })
 
+  // 预设：`<dataDir>/preset/*.md`，文件名（去掉 `.md`）就是预设名。一个会话
+  // 选中哪份，就把哪份写进宿主的 harness identity；目录被监听，改文件、加文件
+  // 都会直接反映到下一次组装，不需要重启。换成哪份由面板的「预设」页签决定，
+  // 这里只提供 `runtime.setPreset()`。
+  const presets = new PresetStore({ dir: join(store.dataDir, PRESET_DIR_NAME), warn })
+
   const runtime = new MemoryRuntime({
     store,
+    presets,
     // The resolved settings are handed over whole: the runtime reads the keys it
     // needs, so a field added to `Config` reaches it without a second list here.
     // 取服务推迟到调用时：本插件可能比 workingDirectory 先挂上，启动那一刻它是空的。
@@ -167,16 +156,32 @@ export function apply(ctx, config) {
 
   ctx.effect(() => {
     store.onChange(({ directory }) => {
-      runtime.handleExternalChange(directory).catch((error) => {
+      try {
+        runtime.broadcast(directory)
+      } catch (error) {
         warn(`memory: 处理记忆变更失败 ${error?.message ?? error}`)
-      })
+      }
     })
     return () => {
       runtime.stop()
       store.dispose()
+      presets.dispose()
     }
   }, 'memory.watch()')
 
+  // 内置预设：包里的 `presets/*.md` 在第一次启动时拷进用户的预设目录。只拷
+  // 没见过的名字（`state/presets-seeded.json` 记着给过哪些），所以改过的不会被
+  // 覆盖，删掉的也不会再冒出来；后来版本新增的预设仍会补上。
+  const bundledPresets = fileURLToPath(new URL('./presets/', import.meta.url))
+  seedPresets({
+    sourceDir: bundledPresets,
+    targetDir: join(store.dataDir, PRESET_DIR_NAME),
+    stateDir: store.stateDir,
+    warn,
+  })
+    .catch((error) => warn(`memory: 复制内置预设失败 ${error?.message ?? error}`))
+    .then(() => presets.start())
+    .catch((error) => warn(`memory: 初始化预设目录失败 ${error?.message ?? error}`))
   runtime.start().catch((error) => warn(`memory: 初始化失败 ${error?.message ?? error}`))
 
   // The settings panel needs somewhere to save to. A profile without a Web
@@ -189,24 +194,38 @@ export function apply(ctx, config) {
     }), 'memory.settingsRoute()')
   })
 
-  ctx.effect(() => ctx.systemPrompt.section({
-    name: 'memory',
-    order: SECTION_ORDER,
-    text: (context) => {
-      // Assembly is synchronous and runs before every model request; a throw
-      // here would fail the whole step, so it degrades to no memory instead.
-      try {
-        return runtime.sectionText(context)
-      } catch (error) {
-        warn(`memory: 组装记忆注入失败 ${error?.message ?? error}`)
-        return ''
-      }
-    },
-  }), 'memory.section()')
+  // 注入不注册自己的分节，而是改写组装好的结果：记忆写进宿主 persona 前缀段
+  //（`deployment:persona-prefix`，order 0），选中的预设写进 harness identity
+  //（`harness:identity`，order -1000）。两段换完之后，提示词最开头就是预设和
+  // 记忆，原来的 persona 与 identity 都不在了。
+  //
+  // 不能自己注册同名分节：分节按作用域分层，preset 已经在这个会话的 agent
+  // 作用域里注册了 persona 段，再注册会撞 "already registered"；harness
+  // identity 又只在宿主开着 includeHarnessIdentity 时才存在。组装瀑布是唯一
+  // 既不撞层、又能在缺段时补一段的位置。
+  //
+  // 先 `await next()` 再改写：动的是最终结果，别的监听器（模型选择、会话引用
+  // 之类的变量提供者）照常工作。记忆按会话冻结（`runtime.sectionText()`），
+  // 预设不冻结（`runtime.presetText()`）——切换预设就是要下一次组装立刻生效，
+  // 前缀缓存被移动是明确接受的代价。
+  //
+  // 文本为空时原样返回：没有记忆就不挖掉 persona，没有预设就保留宿主原生的
+  // identity。失败只降级成「不覆盖」：组装失败会毁掉整个模型请求，而记忆和
+  // 预设不该有这个权力。
+  ctx.effect(() => ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
+    const settled = await next()
+    try {
+      const memory = overridePersona(settled, runtime.sectionText(context))
+      return overrideHarnessIdentity(memory, runtime.presetText(context))
+    } catch (error) {
+      warn(`memory: 改写提示词前缀失败 ${error?.message ?? error}`)
+      return settled
+    }
+  }), 'memory.prompt()')
 
   ctx.effect(() => ctx.on('agent/created', async ({ agent, signal }) => {
     try {
-      const subagent = isSubagent(agent)
+      const subagent = isSubagentAgent(agent)
       if (subagent && agent.ctx !== undefined) {
         try {
           agent.ctx.tools.restrict({ deny: [TOOL_NAMES.edit, TOOL_NAMES.manage] })
