@@ -308,19 +308,22 @@ window.__ModuleLoader__.load({
       .dsm-root ::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-l2); border-radius: 4px; }
       .dsm-root ::-webkit-scrollbar-track { background: transparent; }
       .dsm-root ::selection { background: color-mix(in srgb, var(--dsw-alias-brand-primary) 35%, transparent); }
-      /* 注入效果与预设预览的标题：宿主的 compact 变体让 h1–h6 继承正文字号，
-         只靠 600 字重区分，13px 正文下面一行 13px 的粗标题几乎看不出来。这里按
-         层级给字号。带 .dsm-root 的两层类压过 primitives 的 module.css（0,2,1
+      /* 注入效果与预设预览：宿主的 compact 变体让 h1–h6 继承正文字号、整块用
+         tertiary 灰，13px 正文下面再一行 13px 的灰标题看不出层级。这里把字号、
+         标题色和边距按改动前的预览尺寸给回来（22/18/16/14），正文提到 secondary。
+         带 .dsm-root 的两层类压过 primitives 的 module.css（0,2,1
          对它 0,1,1），不靠样式表的插入顺序。 */
+      .dsm-root .dsm-markdown { color: var(--dsw-alias-label-secondary); }
       .dsm-root .dsm-markdown :is(h1, h2, h3, h4, h5, h6) {
+        margin: 14px 0 6px;
         color: var(--dsw-alias-label-primary);
         line-height: 1.35;
       }
-      .dsm-root .dsm-markdown h1 { font-size: 18px; }
-      .dsm-root .dsm-markdown h2 { font-size: 16px; }
-      .dsm-root .dsm-markdown h3 { font-size: 15px; }
+      .dsm-root .dsm-markdown h1 { font-size: 22px; }
+      .dsm-root .dsm-markdown h2 { font-size: 18px; }
+      .dsm-root .dsm-markdown h3 { font-size: 16px; }
       .dsm-root .dsm-markdown h4 { font-size: 14px; }
-      .dsm-root .dsm-markdown h5, .dsm-root .dsm-markdown h6 { font-size: 13px; }
+      .dsm-root .dsm-markdown h5, .dsm-root .dsm-markdown h6 { font-size: 14px; }
       @keyframes dsm-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
       .dsm-skeleton {
         height: 10px;

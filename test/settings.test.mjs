@@ -464,17 +464,30 @@ try {
     assert.doesNotMatch(client, /toolbarLabels:/, '别给 code.toolbarLabels')
   })
 
-  // compact 变体让 h1–h6 继承正文字号，13px 的正文下面再一行 13px 粗标题看不出来。
-  // 字号只能靠面板自己的样式表压过去，两处预览的包裹元素得挂上钩子类。
+  // compact 变体让 h1–h6 继承正文字号、整块用 tertiary 灰，13px 的正文下面再一行
+  // 13px 灰标题看不出层级。字号和颜色只能靠面板自己的样式表压过去，两处预览的包裹
+  // 元素得挂上钩子类。这里钉住改回的那套数值，别让谁顺手又调小。
   await check('预览里的标题字号按层级放大', async () => {
     const client = await readFile(join(import.meta.dirname, '..', 'ui', 'client.js'), 'utf8')
-    for (const level of ['h1', 'h2', 'h3', 'h4']) {
+    const sizes = { h1: 22, h2: 18, h3: 16, h4: 14 }
+    for (const [level, size] of Object.entries(sizes)) {
       assert.match(
         client,
-        new RegExp(`\\.dsm-root \\.dsm-markdown ${level} \\{ font-size: \\d+px; \\}`),
-        `PANEL_STYLES 应给 ${level} 定字号`,
+        new RegExp(`\\.dsm-root \\.dsm-markdown ${level} \\{ font-size: ${size}px; \\}`),
+        `PANEL_STYLES 应给 ${level} 定 ${size}px`,
       )
     }
+    // 正文别再跟着 compact 的 tertiary 灰一路淡下去。
+    assert.match(
+      client,
+      /\.dsm-root \.dsm-markdown \{ color: var\(--dsw-alias-label-secondary\); \}/,
+      '预览正文用 label-secondary',
+    )
+    assert.match(
+      client,
+      /\.dsm-root \.dsm-markdown :is\(h1, h2, h3, h4, h5, h6\) \{\s*margin: 14px 0 6px;\s*color: var\(--dsw-alias-label-primary\);/,
+      '标题用 label-primary 且保留 14px 0 6px 的上边距',
+    )
     for (const name of ['client.file.js', 'client.presets.js']) {
       const chunk = await readFile(join(import.meta.dirname, '..', 'ui', name), 'utf8')
       assert.match(chunk, /className: 'dsm-markdown'/, `${name} 的预览包裹应挂 dsm-markdown`)
