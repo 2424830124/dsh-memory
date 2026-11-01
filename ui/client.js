@@ -6,7 +6,8 @@ window.__ModuleLoader__.load({
 
     // 宿主的界面组件：按钮、输入框、开关、分段控件、菜单和图标。
     // 用它们而不是自己画，字号、圆角、悬停和焦点才和宿主其余界面一致。
-    // 注入效果的预览不经过宿主：`injectedPreview()` 自己按行画（见本文件）。
+    // 「注入效果」的预览也用宿主的 Markdown 渲染器（`UI.MarkdownText`，见本文件
+    // `injectedPreview()`）：粗体、列表、表格的解析规则因此和对话区完全一致。
     const UI = require('@deepseek-ai/dsh-client-ui-primitives')
 
     /** Locale namespace for this panel's text. */
@@ -32,6 +33,10 @@ window.__ModuleLoader__.load({
         'pane.injected': '注入效果',
         'pane.raw': '原始文本',
         'pane.preview': '预览',
+        // 宿主 Markdown 渲染器要的界面文案（代码块复制按钮、脚注标题）。
+        'markdown.copy': '复制',
+        'markdown.copied': '已复制',
+        'markdown.footnotes': '脚注',
         'meta.title': '元数据',
         'meta.fileName': '文件名',
         'meta.desc': '描述',
@@ -145,6 +150,9 @@ window.__ModuleLoader__.load({
         'pane.injected': 'Injected',
         'pane.raw': 'Text',
         'pane.preview': 'Preview',
+        'markdown.copy': 'Copy',
+        'markdown.copied': 'Copied',
+        'markdown.footnotes': 'Footnotes',
         'meta.title': 'Metadata',
         'meta.fileName': 'File name',
         'meta.desc': 'Description',
@@ -247,6 +255,8 @@ window.__ModuleLoader__.load({
     // The translator is module state because the component has no access to the
     // plugin context. Locale changes refresh it and notify the mounted panel.
     let translate = (key) => key
+    // 宿主 Markdown 渲染器要的那几串文案（代码块复制按钮、脚注标题），按语言缓存一次。
+    let markdownLabels = null
     const listeners = new Set()
     const subscribe = (listener) => {
       listeners.add(listener)
@@ -255,6 +265,9 @@ window.__ModuleLoader__.load({
     const readTranslate = () => translate
     const setTranslate = (next) => {
       translate = next
+      // Markdown 渲染器的文案跟着语言走：缓存是在它自己那边清的，不然切语言后
+      // 代码块的「复制」还是旧语言。
+      markdownLabels = null
       for (const listener of [...listeners]) listener()
     }
 
@@ -1077,44 +1090,46 @@ window.__ModuleLoader__.load({
      */
     const MAX_DEPTH = 4
 
-    const previewTextStyle = {
-      margin: 0,
-      fontSize: 13,
-      lineHeight: '20px',
-      color: 'var(--dsw-alias-label-secondary)',
-      whiteSpace: 'pre-wrap',
-      wordBreak: 'break-word',
+    /**
+     * The chrome text the Host's Markdown renderer asks for.
+     *
+     * `MarkdownText` 只读两处：代码块复制按钮（`code.copyLabel` /
+     * `code.copiedLabel`）和脚注区的无障碍标题（`footnotes`）。别补 `code.toolbarLabels`
+     * —— 那一项一旦给了，它就改画带折叠/换行的完整工具栏，还要一串我们没配的文案。
+     * 对象按语言缓存（见 `markdownLabels`）：`MarkdownText` 是 memo 组件，每次传新对象
+     * 等于每轮重渲染。
+     *
+     * @returns {object} the labels object to hand to `MarkdownText`.
+     */
+    const markdownLabelsFor = () => {
+      if (markdownLabels === null) {
+        markdownLabels = {
+          code: { copyLabel: translate('markdown.copy'), copiedLabel: translate('markdown.copied') },
+          footnotes: translate('markdown.footnotes'),
+        }
+      }
+      return markdownLabels
     }
 
-    /** 注入预览里各级标题的字号，和正文拉开差距。 */
-    const PREVIEW_HEADING_SIZES = { 1: 22, 2: 18, 3: 16, 4: 14 }
-
-    const previewHeadingStyle = (depth) => ({
-      margin: '14px 0 6px',
-      fontSize: PREVIEW_HEADING_SIZES[depth] ?? 14,
-      fontWeight: 600,
-      lineHeight: 1.35,
-      color: 'var(--dsw-alias-label-primary)',
+    /**
+     * Render injected text the way the model's Markdown would read.
+     *
+     * 用宿主的 `MarkdownText`（同一个 primitives 包，`variant: 'compact'` 是次级字号 +
+     * 紧凑行距，正好是侧栏尺寸）而不是自己按行切：粗体、斜体、行内代码、列表、表格的
+     * 解析规则就此和对话区一致，不必在这里维护第二套。
+     *
+     * 记忆文件的注入文本是 YAML 头 + 标题树的伪 Markdown：`---` 会画成分隔线、
+     * `- Keyword:` 会变成列表项、`<memory>` 那行按原始文本显示。这是「用真解析器」的
+     * 代价，也是它比自制渲染更接近模型所见的地方。
+     *
+     * @param {string} text - the injected text.
+     * @returns {object} the rendered element.
+     */
+    const injectedPreview = (text) => h(UI.MarkdownText, {
+      text: String(text ?? ''),
+      labels: markdownLabelsFor(),
+      variant: 'compact',
     })
-
-    const injectedPreview = (text) => String(text ?? '').split(/\r?\n/)
-      .map((line, index) => {
-        const heading = /^(#{1,4})\s+(.*)$/.exec(line)
-        if (heading !== null) {
-          return h('div', { key: `h${index}`, style: previewHeadingStyle(heading[1].length) }, heading[2])
-        }
-        if (line.trim() === '') return h('div', { key: `g${index}`, style: { height: 6 } })
-        if (/^<\/?memory>$/.test(line.trim())) {
-          return h('div', { key: `t${index}`, style: { ...previewTextStyle, fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, line)
-        }
-        if (line.startsWith('- ')) {
-          return h('div', { key: `l${index}`, style: { ...previewTextStyle, paddingLeft: 12, textIndent: '-8px' } }, `• ${line.slice(2)}`)
-        }
-        if (/^---+$/.test(line.trim())) {
-          return h('div', { key: `s${index}`, style: { height: 1, background: 'var(--dsw-alias-border-l1)', margin: '8px 0' } })
-        }
-        return h('div', { key: `p${index}`, style: previewTextStyle }, line)
-      })
 
     const caretStyle = (open) => ({
       flex: '0 0 auto',

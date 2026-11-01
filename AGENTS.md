@@ -217,7 +217,8 @@ node test/dump.mjs
 - chunk 里**只有**"拿 props 返回 vnode"的纯函数：没有 hooks、没有 state、不 import 彼此的辅助函数。样式常量、`t`、全部 state 与 setter、以及跨区共用的工厂（`placeholder` / `chips` / `spawnAdd` / `saveFile` …）都由主包当 props 传下去。状态只有一份，chunk 只负责画。
 - 用 `useState` + `useEffect` 加载 chunk，不用 `React.lazy`：不依赖宿主有没有包 Suspense 边界。没加载完之前右栏是 skeleton、左栏和设置表单显示"加载中"。
 - 面板自己定高：`ResizeObserver`（面板 + 滚动宿主）+ 宿主 DOM 的 `MutationObserver` + `window.resize` 触发，`requestAnimationFrame` 合帧。**别改回轮询**。
-- 控件一律用宿主的 primitives（`Button` `Input` `Switch` `SegmentedControl` `Menu` `Icon*`，来自 `require('@deepseek-ai/dsh-client-ui-primitives')`）；颜色一律用主题别名（`--dsw-alias-*`），不写死十六进制。图标不透传 `style`，颜色交给外层元素（`label-caption` / `label-tertiary` 这类）。
+- 控件一律用宿主的 primitives（`Button` `Input` `Switch` `SegmentedControl` `Menu` `MarkdownText` `Icon*`，来自 `require('@deepseek-ai/dsh-client-ui-primitives')`）；颜色一律用主题别名（`--dsw-alias-*`），不写死十六进制。图标不透传 `style`，颜色交给外层元素（`label-caption` / `label-tertiary` 这类）。
+- 「注入效果」和预设预览都走宿主的 `MarkdownText`（`variant: 'compact'`），**不要自己按行切**：`injectedPreview()` 只是 `h(UI.MarkdownText, { text, labels, variant: 'compact' })` 的一层包装。`labels` 少不得，而且只要两项——`code.copyLabel` / `code.copiedLabel` 与 `footnotes`；**别传 `code.toolbarLabels`**，那一项一给，它就去画带折叠/换行的完整工具栏，还要一串我们没配的文案。`labels` 对象按语言缓存（`markdownLabels`），切语言时在 `setTranslate()` 里清掉，否则 memo 组件会一直拿着旧语言的文案。不包 `MarkdownDelegateProvider` 是安全的：本地链接退化成纯文本、本地图片只显示 alt。
 - 不用 `window.prompt` / `window.confirm`（Electron 里前者不支持、后者同步阻塞会让窗口收不到指针事件），新建/删除都在栏内展开。
 - 保存只替换**刚保存的那一半**草稿，另一半（还没保存的正文或描述）留在原处——把整份草稿重建成磁盘状态等于抹掉用户正在写的东西。
 - 保存按钮用 `inFlight` ref 挡重复点击：回车和按钮能在同一次渲染里各触发一次，`busy` 那时还是 `false`。

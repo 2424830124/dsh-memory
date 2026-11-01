@@ -450,6 +450,19 @@ try {
     const client = await readFile(join(import.meta.dirname, '..', 'ui', 'client.js'), 'utf8')
     assert.ok(client.includes(SETTINGS_ROUTE), `ui/client.js 应调用 ${SETTINGS_ROUTE}`)
   })
+
+  // 面板的预览走宿主的 Markdown 渲染器，不再自己按行切。文本断言只是栅栏：
+  // 真正的渲染在浏览器里，这里只钉住「用的还是宿主那一个组件、labels 给够了」。
+  await check('注入预览用宿主的 Markdown 渲染器', async () => {
+    const client = await readFile(join(import.meta.dirname, '..', 'ui', 'client.js'), 'utf8')
+    assert.match(client, /h\(UI\.MarkdownText, \{/, 'injectedPreview() 应渲染 UI.MarkdownText')
+    assert.match(client, /variant: 'compact'/, '侧栏预览用 compact 变体')
+    assert.match(client, /copyLabel: translate\('markdown\.copy'\)/, 'labels.code.copyLabel 少不得')
+    assert.match(client, /copiedLabel: translate\('markdown\.copied'\)/, 'labels.code.copiedLabel 少不得')
+    assert.match(client, /footnotes: translate\('markdown\.footnotes'\)/, 'labels.footnotes 少不得')
+    // 给了 toolbarLabels，宿主就改画带折叠/换行的完整工具栏，还要一串没配的文案。
+    assert.doesNotMatch(client, /toolbarLabels:/, '别给 code.toolbarLabels')
+  })
 } finally {
   await rm(root, { recursive: true, force: true })
 }
