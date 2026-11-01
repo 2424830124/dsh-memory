@@ -136,37 +136,58 @@ check('old_string 可以是跨行片段，只换这一截', () => {
   applyEdit(doc, { path: ['a'], oldString: '很好\n', newString: '不好\n不' }, 'now')
   assert.equal(bodyAt(doc, ['a']), '今天天气不好\n不适合出去踢球')
 })
-check('正文开头不能是 #，中间可以有', () => {
+check('正文不能出现标题行，中间也不行', () => {
   const doc = parseDocument('meta_data:\n  file_name: x\ndata:\n  a:\n    desc: 原来的内容\n')
   // 开头是 # 的一律拒绝：整段换掉和前面带空格都算开头。
   assert.throws(
     () => applyEdit(doc, { path: ['a'], oldString: '原来的内容', newString: '#伪标题\n补充一句' }, 'now'),
-    /开头不能是 "#"/,
+    /正文中不能出现标题/,
   )
   assert.throws(
     () => applyEdit(doc, { path: ['a'], oldString: '原来的内容', newString: '   ##前导空白也算开头' }, 'now'),
-    /开头不能是 "#"/,
+    /正文中不能出现标题/,
   )
   assert.equal(bodyAt(doc, ['a']), '原来的内容')
 
-  // 中间和后一行可以带 #。
+  // 正文中间和后一行也不行：渲染出来和标题行没法区分。
+  assert.throws(
+    () => applyEdit(doc, { path: ['a'], newString: '第一行\n#后面这行会被读成标题' }, 'now'),
+    /正文中不能出现标题/,
+  )
+  assert.equal(bodyAt(doc, ['a']), '原来的内容')
+
+  // 报错要指回去用 heading_path 建标题。
+  assert.throws(
+    () => applyEdit(doc, { path: ['a'], newString: '第一行\n## 子标题' }, 'now'),
+    /新建标题请在 heading_path 里写出层级/,
+  )
+
+  // 句中的 # 不是标题行，照旧允许。
   applyEdit(doc, { path: ['a'], newString: '这句里有个 # 号' }, 'now')
   assert.equal(bodyAt(doc, ['a']), '原来的内容\n\n这句里有个 # 号')
-  applyEdit(doc, { path: ['a'], newString: '第一行\n#后面这行不是标题' }, 'now')
-  assert.equal(bodyAt(doc, ['a']), '原来的内容\n\n这句里有个 # 号\n\n第一行\n#后面这行不是标题')
 
-  // 新建标题时正文也能带 #，只要不是开头。
-  applyEdit(doc, { path: ['a', 'b'], newString: '正文 # 里有井号\n#后面这行也不是标题' }, 'now')
-  assert.equal(findNode(doc, ['a', 'b'])?.desc, '正文 # 里有井号\n#后面这行也不是标题')
+  // 新建标题时正文同样不能带标题行。
+  assert.throws(
+    () => applyEdit(doc, { path: ['a', 'b'], newString: '正文 # 里有井号\n#后面这行也不是标题' }, 'now'),
+    /正文中不能出现标题/,
+  )
+  assert.equal(findNode(doc, ['a', 'b']), undefined)
+  applyEdit(doc, { path: ['a', 'b'], newString: '正文 # 里有井号' }, 'now')
+  assert.equal(findNode(doc, ['a', 'b'])?.desc, '正文 # 里有井号')
 
   // 开头写成标题行（# 后面带空格）仍旧按「重命名」解释，正文必须换一种写法。
   assert.throws(() => applyEdit(doc, { path: ['a'], newString: '# 出现在开头' }, 'now'), /改标题时必须用 old_string/)
-  // 新建标题时 new_string 若以 # 打头，正文校验先拦下来。
+  // 新建标题时 new_string 的第一行若也是标题行，正文校验会拦下来。
   assert.throws(
     () => applyEdit(doc, { path: ['a', 'c'], newString: '## c\n正文' }, 'now'),
-    /开头不能是 "#"/,
+    /正文中不能出现标题/,
   )
   assert.equal(findNode(doc, ['a', 'c']), undefined)
+  // 单行标题行则走「新建标题只要在 heading_path 里写」那条提示。
+  assert.throws(
+    () => applyEdit(doc, { path: ['a', 'c'], newString: '## c' }, 'now'),
+    /新建标题只要在 heading_path/,
+  )
 })
 check('替换后再整体整理空行：new_string 补一个换行即可断开', () => {
   const doc = parseDocument('meta_data:\n  file_name: x\ndata:\n  a:\n    desc: |-\n      今天天气很好，适合出去踢球\n')

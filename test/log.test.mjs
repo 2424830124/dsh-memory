@@ -258,7 +258,7 @@ await check('条目按时间排序，不按写入顺序', () => {
   assert.deepEqual(entriesOf(log), ['09:10 早上', '12:35 中午', '14:05 下午'])
 })
 
-await check('日志条目可以改名，一级标题不能改，条目不能删，正文开头不能是 #', () => {
+await check('日志条目可以改名，一级标题不能改，条目不能删，正文不能出现标题行', () => {
   const log = logOf()
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '还是那家店' }, 'T')
 
@@ -275,16 +275,23 @@ await check('日志条目可以改名，一级标题不能改，条目不能删�
 
   assert.throws(() => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], removeOnly: true }, 'T'), /日志条目不能删除/)
 
-  // 只改正文时 "#" 仍然只在标题行出现：两边都写成标题行才算改名。
+  // 第一行是标题行就按改名解释，缺 old_string 时提示两条路都怎么写。
   assert.throws(
     () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '## 新标题' }, 'T'),
-    /正文开头不能是 "#"/,
+    /必须用 old_string 给出原标题行/,
   )
   assert.throws(
     () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '#吃了面', newString: '吃了面' }, 'T'),
-    /正文的开头不能是 "#"/,
+    /正文中不能出现标题/,
   )
-  // 中间带 # 是普通正文，允许。
+  // 正文中间和后一行也不行：渲染出来就是标题行。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '还是那家店\n## 12:40 顺便记一笔' }, 'T'),
+    /正文中不能出现标题/,
+  )
+  assert.equal(logEntries(log)[0][1].desc, '还是那家店')
+
+  // 句中的 # 不是标题行，照旧允许。
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '还是那家店', newString: '还是那家 # 面馆' }, 'T')
   assert.equal(logEntries(log)[0][1].desc, '还是那家 # 面馆')
 })

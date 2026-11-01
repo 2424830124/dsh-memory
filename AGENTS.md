@@ -89,7 +89,7 @@ node test/dump.mjs
 4. **`desc` / `keyword` / `update_at` 是标题的保留字**，任何层级都不能当标题名。
 5. **同级不能重名**；`file_name` 在"一个会话能看到的目录"里唯一（不同工作区各自同名是允许的）。
 6. **序列化往返稳定**：`serializeDocument` → `parseDocument` 必须得到同一份文档；空字段不写进文件（例外：`meta_data.desc` 无条件写，标题节点的 `desc` / `keyword` 才按空跳过）。
-7. **正文开头不能是 `#`**（会被读成标题行）；中间和后面几行可以。日志正文本条同理（`assertPlainLog()`）；日志的**改名**走另一分支，两边都写成标题行才成立。
+7. **正文里不能出现标题行**：任何一行（第一行或换行之后的某一行）以 `#` 开头，渲染出来都和标题行不可区分，会指向一条树里没有的标题。判断点是 `lib/edit.js` 的 `hasHeadingLine()`，正文与日志正文共用同一句报错。日志的**改名**走另一分支（`renameLogEntry()`，在 `assertPlainLog()` 之前），两边都写成标题行才成立。
 8. **错误绝不外抛**：注入组装、agent 创建、工具管线里的异常都可能毁掉无关请求。每个 hook 都包住，最坏降级成空注入 / `return []` / 一条 warning。
 9. **通知只在这个会话有未告知的变化时发**；何时检查由 `MemoryNotificationScheduler` 决定，唯一的 diff/通知实现点仍是 `MemoryRuntime.notifyAgent()`。
 10. **面板不另做一套渲染**：「原文」和「注入效果」都走 `runtime.fileText()`，跟 `memory_read` / `renderInjection` 同源。
