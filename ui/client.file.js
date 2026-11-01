@@ -642,7 +642,8 @@ window.__ModuleLoader__.load({
                   style: preview ? paneSwitchActiveStyle : paneSwitchStyle,
                 }, t('pane.preview')))),
             // 注入效果自己滚：面板定高，长文档不把整页顶长。
-            h('div', { style: injectedBodyStyle },
+            // `dsm-markdown` 只当样式钩子：标题字号在 `PANEL_STYLES` 里按层级给。
+            h('div', { className: 'dsm-markdown', style: injectedBodyStyle },
               preview
                 ? injectedPreview(file.injected)
                 : h('pre', { style: fileTextStyle }, file.injected))))

@@ -372,7 +372,7 @@ window.__ModuleLoader__.load({
         h('div', { style: paneStyle },
           h('div', { style: paneHeadStyle },
             paneCaption(UI.IconContextInjectionOutlineRegular, t('presets.preview'))),
-          h('div', { style: injectedBodyStyle }, injectedPreview(draft))))
+          h('div', { className: 'dsm-markdown', style: injectedBodyStyle }, injectedPreview(draft))))
 
       const body = picked === null
         ? placeholder(t('presets.pick'), t('presets.pickHint'))

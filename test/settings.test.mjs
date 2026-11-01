@@ -463,6 +463,23 @@ try {
     // 给了 toolbarLabels，宿主就改画带折叠/换行的完整工具栏，还要一串没配的文案。
     assert.doesNotMatch(client, /toolbarLabels:/, '别给 code.toolbarLabels')
   })
+
+  // compact 变体让 h1–h6 继承正文字号，13px 的正文下面再一行 13px 粗标题看不出来。
+  // 字号只能靠面板自己的样式表压过去，两处预览的包裹元素得挂上钩子类。
+  await check('预览里的标题字号按层级放大', async () => {
+    const client = await readFile(join(import.meta.dirname, '..', 'ui', 'client.js'), 'utf8')
+    for (const level of ['h1', 'h2', 'h3', 'h4']) {
+      assert.match(
+        client,
+        new RegExp(`\\.dsm-root \\.dsm-markdown ${level} \\{ font-size: \\d+px; \\}`),
+        `PANEL_STYLES 应给 ${level} 定字号`,
+      )
+    }
+    for (const name of ['client.file.js', 'client.presets.js']) {
+      const chunk = await readFile(join(import.meta.dirname, '..', 'ui', name), 'utf8')
+      assert.match(chunk, /className: 'dsm-markdown'/, `${name} 的预览包裹应挂 dsm-markdown`)
+    }
+  })
 } finally {
   await rm(root, { recursive: true, force: true })
 }
