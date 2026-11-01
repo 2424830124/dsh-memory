@@ -480,6 +480,23 @@ try {
       assert.match(chunk, /className: 'dsm-markdown'/, `${name} 的预览包裹应挂 dsm-markdown`)
     }
   })
+
+  // 这条是为 0.3.3 那次事故留的栅栏：`PANEL_STYLES` 是模板字符串，注释里写了一个反引号
+  // 会把字符串截断成两段，于是整份 client.js 在浏览器里 import 失败、DSH 渲染进程直接
+  // 起不来（`node --check` 只查语法，反引号正好让它仍然"合法"，查不出来）。所以这里把
+  // 那一段真的求值一次，要它能返回字符串。
+  await check('面板样式表能被求值（模板字符串没有被反引号截断）', async () => {
+    const client = await readFile(join(import.meta.dirname, '..', 'ui', 'client.js'), 'utf8')
+    const start = client.indexOf('const PANEL_STYLES = `')
+    assert.ok(start > 0, 'ui/client.js 里应有 const PANEL_STYLES = `…`')
+    const end = client.indexOf('\n    `', start)
+    assert.ok(end > start, '找不到 PANEL_STYLES 的收尾反引号')
+    // slice 停在收尾反引号之前，补回那个反引号才是一个完整的模板字符串。
+    const source = `${client.slice(start, end)}\n    \``
+    const styles = new Function(`${source}\nreturn PANEL_STYLES`)()
+    assert.equal(typeof styles, 'string')
+    assert.match(styles, /\.dsm-root button/)
+  })
 } finally {
   await rm(root, { recursive: true, force: true })
 }

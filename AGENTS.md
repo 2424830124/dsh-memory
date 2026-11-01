@@ -273,6 +273,7 @@ POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove
 ## 15. 约定与坑
 
 - **改文本文件只能用 read / edit / write 工具。** 别用 PowerShell 的 `Get-Content -Raw | Set-Content -Encoding UTF8`：它会把 UTF-8 当 GBK 解码，整份文件变乱码（本项目真被这个毁过一次）。用 Node 脚本做行区间手术是安全的（`readFileSync(...,'utf8')` → `writeFileSync(...,'utf8')`），但仍要跑 `node --check` 并复读。
+- **`ui/client.js` 的 `PANEL_STYLES` 是模板字符串，注释里不许出现反引号。** 0.3.3 真栽过：我在那段 CSS 的注释里写了 `` `dsm-root` ``，反引号把模板字符串截断成两段，`node --check` 照样通过（语法上恰好仍然合法），但浏览器里整份 `client.js` import 失败 → `web boot: 1 entry did not activate / @huai_xin/dsh-memory: import failed` → DSH 渲染进程重试 3 次后退出。所以：**面板 CSS 注释里写选择器不要加反引号**，改完 UI 一定要跑 `test/settings.test.mjs` 的「面板样式表能被求值」那条（它把 `PANEL_STYLES` 真的求值一次），别只信 `node --check`。
 - **别给"测试正在等"的定时器加 `unref()`。** `unref()` 让事件循环不再等它，顶层 `await` 就永远不 settle，Node 判定进程无事可做直接退出（`test/store.test.mjs` 的文件监听用例真被这个打挂过）。`watch.js` 的防抖定时器**不能** unref；`runtime.js` 的午夜切天与快照清扫不参与测试等待，可以 unref。
 - **`update_at` 落盘走 `lib/text.js` 的 `localTimestamp()`**：本地墙上时间带偏移（`2026-10-27T03:18:36+08:00`）。别用 `toISOString()`——那是 UTC，面板和提示词里都会和用户的钟差上几个小时；也别写成不带偏移的裸时间，换个时区就没法和别人的比。生成点只有两个：`runtime.js` 的 `writeEdit()` 和 `panel-service.js` 的 `patchFile()`。内部状态（快照 `updatedAt`、`touched`）仍是 ISO `Z`，那不给用户看。
 - 仓库有 git（`origin` = github.com/2424830124/dsh-memory），历史都在提交里；`.backup/` 是加 git 之前留的临时备份，已经清掉。
