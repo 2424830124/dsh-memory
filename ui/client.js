@@ -46,6 +46,7 @@ window.__ModuleLoader__.load({
         'content.addRoot': '加一级标题',
         'node.addChild': '加子标题',
         'node.title': '标题',
+        'node.drag': '拖动改顺序',
         'node.updatedAt': '更新于',
         'node.keyword': '关键词',
         remove: '删除',
@@ -92,7 +93,7 @@ window.__ModuleLoader__.load({
         'presets.deleteNo': '取消',
         'presets.empty': '还没有预设',
         'presets.pick': '选一份预设。',
-        'presets.pickHint': '点「使用」并确认后，这份预设才会整体替换提示词最开头的 harness identity；切换会作废一次前缀缓存，所以要先确认。',
+        'presets.pickHint': '点「使用」会先让你确认一次——编辑栏头是表头那条警告行，默认身份那块是按钮自己变成「确认切换」，点窗口别处算取消。切换会作废一次前缀缓存。',
         'presets.save': '保存',
         'presets.saving': '保存中…',
         'presets.unsaved': '有未保存的修改',
@@ -162,6 +163,7 @@ window.__ModuleLoader__.load({
         'content.addRoot': 'Add a top-level heading',
         'node.addChild': 'Add a sub-heading',
         'node.title': 'Heading',
+        'node.drag': 'Drag to reorder',
         'node.updatedAt': 'Updated',
         'node.keyword': 'Keywords',
         remove: 'Remove',
@@ -207,7 +209,7 @@ window.__ModuleLoader__.load({
         'presets.deleteNo': 'Cancel',
         'presets.empty': 'No presets yet',
         'presets.pick': 'Pick a preset.',
-        'presets.pickHint': 'Press “Use” and confirm to replace the harness identity at the very start of the prompt; switching drops the prefix cache once, hence the confirmation.',
+        'presets.pickHint': 'Pressing “Use” asks once — the editor header raises a warning row, while the default-identity card turns its own button into a red “Switch”; clicking anywhere else cancels. Switching drops the prefix cache once.',
         'presets.save': 'Save',
         'presets.saving': 'Saving…',
         'presets.unsaved': 'Unsaved changes',
@@ -304,6 +306,10 @@ window.__ModuleLoader__.load({
       .dsm-rail-delete:focus-visible { opacity: 1; color: var(--dsw-alias-label-primary); }
       .dsm-rail-item:hover .dsm-grip,
       .dsm-rail-item[data-active='true'] .dsm-grip { opacity: 0.5; }
+      .dsm-card-grip { height: 16px; cursor: grab; }
+      .dsm-card:hover .dsm-card-grip { opacity: 0.45; }
+      .dsm-card[data-dragging='true'] { opacity: 0.45; }
+      .dsm-card[data-over='true'] { box-shadow: inset 0 2px 0 0 var(--dsw-alias-brand-primary); }
       .dsm-root ::-webkit-scrollbar { width: 8px; height: 8px; }
       .dsm-root ::-webkit-scrollbar-thumb { background: var(--dsw-alias-border-l2); border-radius: 4px; }
       .dsm-root ::-webkit-scrollbar-track { background: transparent; }
@@ -1281,6 +1287,14 @@ window.__ModuleLoader__.load({
       // 左栏的新建 / 删除结果：它必须显示在左栏，因为这类操作之后右栏常常是空的。
       const [railNote, setRailNote] = React.useState(null)
       const [removed, setRemoved] = React.useState([])
+      // 标题的拖动重排：键是父级路径（`JSON.stringify`），值是这个父级下
+      // 标题的新顺序。和 `removed` 一样是草稿，点内容卡的「保存」才落盘。
+      // 只记到「动过的那几层」，没动过的层仍按磁盘顺序摆。
+      const [reorders, setReorders] = React.useState({})
+      // 正在拖的标题：`{ parent, title }`，`parent` 是父级路径的 JSON 键。
+      // 拖到哪张卡上是另一份状态，`overKey` 就是那张卡的标题路径键。
+      const [nodeDrag, setNodeDrag] = React.useState(null)
+      const [overKey, setOverKey] = React.useState(null)
       // 两张卡各自能收起。
       const [metaOpen, setMetaOpen] = React.useState(false)
       const [adds, setAdds] = React.useState([])
@@ -1597,6 +1611,30 @@ window.__ModuleLoader__.load({
         void savePatch({ fileOrder: order })
       }
 
+      /**
+       * 把一个标题挪到同级的另一个位置，记成草稿里的顺序。
+       *
+       * 只改内存：点内容卡的「保存」才把整层顺序发给后端。同名（拖到自己身上）
+       * 或者目标不在这一层里都不做任何事。
+       *
+       * @param {string[]} parentPath - 这一层的父级路径，一级标题是 `[]`。
+       * @param {string[]} titles - 这一层眼下画出来的顺序。
+       * @param {string} from - 被拖的标题。
+       * @param {string} to - 落到哪个标题的位置上。
+       * @returns {void}
+       */
+      const headingDrag = (parentPath, titles, from, to) => {
+        if (!Array.isArray(titles) || from === to) return
+        const next = [...titles]
+        const start = next.indexOf(from)
+        const target = next.indexOf(to)
+        if (start < 0 || target < 0) return
+        next.splice(start, 1)
+        next.splice(target, 0, from)
+        setReorders((previous) => ({ ...previous, [JSON.stringify(parentPath)]: next }))
+        setContentNote(null)
+      }
+
       // 切作用域、切货架，右栏的选中项都属于上一个列表，必须清空，
       // 否则会拿着 A 页的文件名去 B 页查，得到一份空内容。
       React.useEffect(() => {
@@ -1699,8 +1737,8 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 点「使用」：先只记下要换成哪一份（`''` 是 DSH 默认身份）并亮警告，
-       * 确认后才真正写这个会话的选择。不切正在看的这一份——否则草稿会跟着没了。
+       * 点「使用」：只把按钮换成「确认切换」（`''` 是 DSH 默认身份），
+       * 再点那一下才真正写这个会话的选择。不切正在看的这一份——否则草稿会跟着没了。
        *
        * @param {string} name - 预设名，`''` 表示回默认身份。
        */
@@ -1727,6 +1765,35 @@ window.__ModuleLoader__.load({
           text: tRef.current(target === '' ? 'presets.defaultOn' : 'presets.selected'),
         })
       }
+
+      /**
+       * 点窗口别处就撤回「确认切换」——只管「DSH 默认身份」那一块。
+       *
+       * 默认身份卡片上的「使用」按下后，按钮就地变成红的「确认切换」，没有另一行
+       * 警告、也没有取消按钮：反悔的方式就是点别处。编辑栏头那份反过来——它有自己
+       * 的警告行和取消按钮，别让点在文本框里的一下把确认收走。
+       *
+       * 捕获阶段听 `pointerdown`，免得某处的 `stopPropagation` 把这个收听掉；
+       * 点到那个红按钮本身不算反悔。Escape 同样算反悔。
+       */
+      React.useEffect(() => {
+        if (presetSwitchTarget !== '') return undefined
+        if (typeof document === 'undefined') return undefined
+        const withdraw = (event) => {
+          const target = event.target
+          if (target instanceof Element && target.closest('[data-dsm-armed="1"]') !== null) return
+          setPresetSwitchTarget(null)
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') setPresetSwitchTarget(null)
+        }
+        document.addEventListener('pointerdown', withdraw, true)
+        document.addEventListener('keydown', onKeyDown, true)
+        return () => {
+          document.removeEventListener('pointerdown', withdraw, true)
+          document.removeEventListener('keydown', onKeyDown, true)
+        }
+      }, [presetSwitchTarget])
 
       const togglePresetCreate = () => {
         setPresetCreating((open) => !open)
@@ -1905,6 +1972,10 @@ window.__ModuleLoader__.load({
         // 待删标题是跟着某一份文件走的：在 A 标了要删、切到 B 还留着，
         // 保存 B 时就会把 A 的路径发出去，撞上同名标题就把 B 删了。
         setRemoved([])
+        // 拖动顺序也跟着这份文件走：在 A 拖了顺序、切到 B 保存，会把 A 的名单发出去。
+        setReorders({})
+        setNodeDrag(null)
+        setOverKey(null)
         setAdding(null)
         setAddText('')
       }, [file])
@@ -1970,7 +2041,8 @@ window.__ModuleLoader__.load({
         const base = draftOfFile(file)
         if (part === 'content') {
           // 还没落盘的新标题不在草稿里，也要算成「改过」。
-          return adds.length > 0 || removed.length > 0 || JSON.stringify(editFile.nodes) !== JSON.stringify(base.nodes)
+          return adds.length > 0 || removed.length > 0 || Object.keys(reorders).length > 0 ||
+            JSON.stringify(editFile.nodes) !== JSON.stringify(base.nodes)
         }
         const pick = (draft) => [draft.fileName, draft.desc, draft.format, draft.injectIgnore]
         return JSON.stringify(pick(editFile)) !== JSON.stringify(pick(base))
@@ -2009,6 +2081,10 @@ window.__ModuleLoader__.load({
               desc: value.desc,
               keyword: value.keyword,
             }))
+          // 拖动顺序整层发：后端只认这一层里还在的标题，别的会忽略。
+          const order = part !== 'content'
+            ? undefined
+            : Object.entries(reorders).map(([parent, titles]) => ({ parent: JSON.parse(parent), titles }))
           const body = await postJson(fileUrl, {
             file: {
               scope: file.scope,
@@ -2024,6 +2100,7 @@ window.__ModuleLoader__.load({
                 }),
               ...(nodes === undefined ? {} : { nodes }),
               ...(part !== 'content' || removed.length === 0 ? {} : { removed }),
+              ...(order === undefined ? {} : { order }),
               ...(newNodes === undefined ? {} : { newNodes }),
             },
           })
@@ -2032,6 +2109,7 @@ window.__ModuleLoader__.load({
           if (part === 'content') {
             setAdds([])
             setRemoved([])
+            setReorders({})
           }
           // 只把刚保存的那一半换成新值，另一半仍留着用户手上的草稿：
           // 改正文 → 改 desc → 保存元数据，不该把正文一起冲掉。
@@ -2295,6 +2373,12 @@ window.__ModuleLoader__.load({
           pickerRect,
           pickerStyle,
           placeholder,
+          reorders,
+          headingDrag,
+          nodeDrag,
+          overKey,
+          setNodeDrag,
+          setOverKey,
           samePath,
           saveButtonStyle,
           saveFile,
@@ -2413,7 +2497,10 @@ window.__ModuleLoader__.load({
           busy: presetBusy,
           creating: presetCreating,
           createText: presetCreateText,
-          switching: presetSwitchTarget !== null,
+          // 默认身份那块：只有它自己被武装时 `useControl('')` 才画成「确认切换」。
+          armed: presetSwitchTarget === '' ? '' : null,
+          // 编辑栏头那条警告行：等确认的是一份预设（不是默认身份）时才亮。
+          switching: presetSwitchTarget !== null && presetSwitchTarget !== '',
           confirming: presetConfirming,
           onPick: pickPreset,
           onUse: usePreset,

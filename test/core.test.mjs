@@ -19,7 +19,7 @@ import {
 import { renderFormats, renderInjection, renderRead } from '../lib/render.js'
 import { diffEntries, diffSections, headingHashes } from '../lib/snapshot.js'
 import { normalizeBody } from '../lib/text.js'
-import { findNode } from '../lib/tree.js'
+import { findNode, findSiblings, reorderHeadings } from '../lib/tree.js'
 
 /** The body text of one heading, the way an edit matches against it. */
 const bodyAt = (document, path) => findNode(document, path)?.desc
@@ -246,6 +246,30 @@ check('重命名标题并保留子树', () => {
   const node = findNode(doc, ['我们经历过的一些事', '我们之间的互动', '2026-10-27'])
   assert.ok(node)
   assert.equal(node.desc, '我们今天一起出去完，用户请我吃饭')
+})
+check('同级重排：列出的排前面，没列出的按原顺序补在后面', () => {
+  const doc = createDocument({ fileName: '排序', scope: 'Global' })
+  const siblings = doc.roots
+  for (const title of ['甲', '乙', '丙']) siblings.set(title, { update_at: 'now', desc: `${title}的正文`, keyword: [], children: new Map() })
+  reorderHeadings(siblings, ['丙', '甲'])
+  // 「乙」没在名单里：它不会消失，也不会被推到名单前面，只是跟在后面。
+  assert.deepEqual([...siblings.keys()], ['丙', '甲', '乙'])
+  assert.equal(siblings.get('乙').desc, '乙的正文')
+  // 名单里出现这一层没有的标题时跳过，不影响其余顺序。
+  reorderHeadings(siblings, ['没有这个', '乙'])
+  assert.deepEqual([...siblings.keys()], ['乙', '丙', '甲'])
+  // 空名单什么都不改。
+  reorderHeadings(siblings, [])
+  assert.deepEqual([...siblings.keys()], ['乙', '丙', '甲'])
+})
+check('同级重排只动那一层，子标题顺序不动', () => {
+  const doc = createDocument({ fileName: '排序', scope: 'Global' })
+  const leaf = (title) => ({ update_at: 'now', desc: '', keyword: [], children: new Map() })
+  doc.roots.set('甲', { ...leaf('甲'), children: new Map([['甲一', leaf('甲一')], ['甲二', leaf('甲二')]]) })
+  doc.roots.set('乙', leaf('乙'))
+  reorderHeadings(findSiblings(doc, ['甲', '甲一']), ['甲二', '甲一'])
+  assert.deepEqual([...doc.roots.keys()], ['甲', '乙'])
+  assert.deepEqual([...doc.roots.get('甲').children.keys()], ['甲二', '甲一'])
 })
 check('删除标题会连子树一起删掉', () => {
   const doc = parseDocument(SAMPLE)

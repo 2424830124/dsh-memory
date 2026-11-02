@@ -72,6 +72,12 @@ window.__ModuleLoader__.load({
         pickerRect,
         pickerStyle,
         placeholder,
+        reorders,
+        headingDrag,
+        nodeDrag,
+        overKey,
+        setNodeDrag,
+        setOverKey,
         samePath,
         saveButtonStyle,
         saveFile,
@@ -115,6 +121,17 @@ window.__ModuleLoader__.load({
       const cardTitleRow = (parts) => h('div', {
         style: inlineRowStyle,
       },
+        // 抓手只出现在记忆文件的标题上：日志按日期排，顺序是插件定的。
+        parts.drag === undefined || parts.drag === null
+          ? null
+          : h('span', {
+            className: 'dsm-grip dsm-card-grip',
+            'aria-hidden': true,
+            title: t('node.drag'),
+            draggable: true,
+            onDragStart: parts.drag.onDragStart,
+            onDragEnd: parts.drag.onDragEnd,
+          }),
         h('button', {
           type: 'button',
           className: 'dsm-hover',
@@ -499,20 +516,54 @@ window.__ModuleLoader__.load({
           metaOpen && rows)
       }
 
+      /**
+       * 按草稿里的顺序摆一层标题。
+       *
+       * 拖过的层在 `reorders` 里有明确名单，没拖过的层直接用磁盘顺序。
+       * 名单里可能有这一层已经没有的标题（刚被改名或删掉），也可能
+       * 少了刚新建的——所以先按名单取认识的，剩下的照原顺序补在后面：
+       * 拖动不该让某个标题凭空消失。
+       *
+       * @param {string[]} parentPath - the heading path of the level's parent.
+       * @param {object[]} nodes - that level's nodes, in disk order.
+       * @returns {object[]} the same nodes, in the order to draw.
+       */
+      const orderNodes = (parentPath, nodes) => {
+        if (!Array.isArray(nodes) || nodes.length === 0) return nodes
+        const wanted = reorders[JSON.stringify(parentPath)]
+        if (!Array.isArray(wanted) || wanted.length === 0) return nodes
+        const rest = new Map(nodes.map((node) => [String(node.title ?? ''), node]))
+        const next = []
+        for (const title of wanted) {
+          const node = rest.get(title)
+          if (node === undefined) continue
+          next.push(node)
+          rest.delete(title)
+        }
+        for (const node of nodes) {
+          if (rest.has(String(node.title ?? ''))) next.push(node)
+        }
+        return next
+      }
+
       /** @returns {object} the content card: every heading, saved on their own. */
-      const contentCard = (tree) => h('section', { key: 'content', style: { ...nodeCardStyle, gap: 8 } },
-        cardHead(t('content.title'), contentOpen, () => setContentOpen((previous) => !previous), 'content', contentNote),
-        contentOpen && (tree.length === 0 && adds.length === 0
-          ? h('p', { style: emptyHintStyle }, t('source.empty'))
-          : tree.filter((node) => !isRemoved([String(node.title ?? '')]))
-            .map((node) => headingCard(node, [String(node.title ?? '')]))),
-        contentOpen && file?.kind === 'memory' && h('div', {
-          style: { display: 'flex', flexDirection: 'column', gap: 6 },
-        },
-          adds.filter((entry) => !isRemoved(entry.parent) && entry.parent.length === 0).map((entry) => pendingRow(entry)),
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-            h('span', { style: { display: 'flex' }, 'data-dsm-picker': '1' },
-              addButton(false, () => spawnAdd([]), t('content.addRoot'))))))
+      const contentCard = (tree) => {
+        const roots = tree.filter((node) => !isRemoved([String(node.title ?? '')]))
+        // 拖动按「同级兄弟」算，所以每一层都要把这一层的顺序一起传下去。
+        const rootTitles = orderNodes([], roots).map((node) => String(node.title ?? ''))
+        return h('section', { key: 'content', style: { ...nodeCardStyle, gap: 8 } },
+          cardHead(t('content.title'), contentOpen, () => setContentOpen((previous) => !previous), 'content', contentNote),
+          contentOpen && (tree.length === 0 && adds.length === 0
+            ? h('p', { style: emptyHintStyle }, t('source.empty'))
+            : orderNodes([], roots).map((node) => headingCard(node, [String(node.title ?? '')], rootTitles))),
+          contentOpen && file?.kind === 'memory' && h('div', {
+            style: { display: 'flex', flexDirection: 'column', gap: 6 },
+          },
+            adds.filter((entry) => !isRemoved(entry.parent) && entry.parent.length === 0).map((entry) => pendingRow(entry)),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              h('span', { style: { display: 'flex' }, 'data-dsm-picker': '1' },
+                addButton(false, () => spawnAdd([]), t('content.addRoot'))))))
+      }
 
       /**
        * One heading, drawn as a card: title row, its metadata, its body, its children.
@@ -522,9 +573,11 @@ window.__ModuleLoader__.load({
        *
        * @param {object} node - the serialized heading.
        * @param {string[]} path - the heading path, which is also its identity.
+       * @param {string[]} siblings - titles drawn at this level, in drawing order.
+       *   拖动按同级兄弟算，所以要一路带着这一层的顺序下来。
        * @returns {object} the card element.
        */
-      const headingCard = (node, path) => {
+      const headingCard = (node, path, siblings) => {
         const key = JSON.stringify(path)
         // 一级标题默认展开，二级以下默认收起：先看目录，再决定展开哪一支。
         const open = collapsed[key] === undefined ? path.length <= 1 : collapsed[key] !== true
@@ -537,10 +590,28 @@ window.__ModuleLoader__.load({
         // 日志的一级标题是日期，只用来分组：它没有正文，别给一个空框让人以为能写。
         const dateHeading = file?.kind === 'log' && path.length === 1
         const toggle = () => setCollapsed((previous) => ({ ...previous, [key]: open }))
+        // 只有记忆文件的标题能拖：日志的标题由插件按日期组织，顺序不是用户定的。
+        const parentPath = path.slice(0, -1)
+        const title = path.at(-1)
+        const levelKey = JSON.stringify(parentPath)
+        const draggable = file?.kind === 'memory'
+        const dragging = draggable && nodeDrag !== null &&
+          nodeDrag.parent === levelKey && nodeDrag.title === title
+        const drag = draggable
+          ? {
+            onDragStart: () => setNodeDrag({ parent: levelKey, title }),
+            // 拖出去或者按 Esc 取消，两个状态都得收干净，否则卡片一直留着落点的线。
+            onDragEnd: () => {
+              setNodeDrag(null)
+              setOverKey(null)
+            },
+          }
+          : null
         // 标题本身也是内容，就地改；改的是草稿，点内容卡的「保存」才落盘。
         // 还能再往下一层时，行末给一个「+」：点了就在这一支下面长一张卡。
         const heading = cardTitleRow({
           open,
+          drag,
           onToggle: toggle,
           title: draftNow.title ?? '',
           onTitle: (value) => patchNode(key, { title: value }),
@@ -589,7 +660,34 @@ window.__ModuleLoader__.load({
               onBlur: () => setPicker(null),
             })),
         })
-        return h('div', { key, style: nodeCardStyle },
+        // 子级也要按草稿顺序摆，并把这一层的顺序一起交给下一层做拖动。
+        const shown = orderNodes(path, children.filter((child) => !isRemoved([...path, String(child.title ?? '')])))
+        const shownTitles = shown.map((child) => String(child.title ?? ''))
+        // 拖动落在另一张卡上就换位置：只在同级兄弟之间换，跨层没有意义。
+        const dropTarget = draggable && nodeDrag !== null &&
+          nodeDrag.parent === levelKey && nodeDrag.title !== title
+        return h('div', {
+          key,
+          className: 'dsm-card',
+          style: nodeCardStyle,
+          'data-dragging': dragging ? 'true' : 'false',
+          'data-over': dropTarget && overKey === key ? 'true' : 'false',
+          onDragOver: dropTarget
+            ? (event) => {
+              event.preventDefault()
+              if (overKey !== key) setOverKey(key)
+            }
+            : null,
+          onDragLeave: dropTarget ? () => setOverKey((previous) => (previous === key ? null : previous)) : null,
+          onDrop: dropTarget
+            ? (event) => {
+              event.preventDefault()
+              setOverKey(null)
+              setNodeDrag(null)
+              headingDrag(parentPath, siblings, nodeDrag.title, title)
+            }
+            : null,
+        },
           heading,
           // 正文在更新时间上面：先说这条记的是什么，再说是谁在什么时候写的。
           open && !dateHeading && h('textarea', {
@@ -606,8 +704,7 @@ window.__ModuleLoader__.load({
             node.updateAt !== '' && h('span', null, `${t('node.updatedAt')}: ${when(node.updateAt)}`),
             keywords),
           open && children.length > 0 && h('div', { style: nodeChildrenStyle },
-            children.filter((child) => !isRemoved([...path, String(child.title ?? '')]))
-              .map((child) => headingCard(child, [...path, String(child.title ?? '')]))),
+            shown.map((child) => headingCard(child, [...path, String(child.title ?? '')], shownTitles))),
           open && adds.filter((entry) => entry.parent.length === path.length && samePath(entry.parent, path))
             .map((entry) => pendingRow(entry)))
       }

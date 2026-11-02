@@ -285,6 +285,12 @@ try {
       newNodes: [{ parent: [], title: '新一级', desc: '正文', keyword: ['k'], 多余: 1 }],
       nodes: [{ path: ['a', 'b'], title: '改过的', desc: '改过的正文', keyword: ['x'] }],
       removed: [['旧标题'], ['旧标题', '子'], '不是数组', []],
+      order: [
+        { parent: [], titles: ['a', 'b'] },
+        { parent: '不是数组', titles: ['c'] },
+        { titles: ['只剩标题'] },
+        '不是对象',
+      ],
       不认得: '丢掉',
     }
     const { status } = await call(handler, 'POST', JSON.stringify({ file: submitted }), '/plugins/dsh-memory/settings?session=s9')
@@ -300,6 +306,11 @@ try {
       newNodes: [{ parent: [], title: '新一级', desc: '正文', keyword: ['k'] }],
       nodes: [{ path: ['a', 'b'], title: '改过的', desc: '改过的正文', keyword: ['x'] }],
       removed: [['旧标题'], ['旧标题', '子']],
+      order: [
+        { parent: [], titles: ['a', 'b'] },
+        { parent: [], titles: ['c'] },
+        { parent: [], titles: ['只剩标题'] },
+      ],
       sessionId: 's9',
     }])
   })

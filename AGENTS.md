@@ -63,7 +63,7 @@ node test/dump.mjs
 | `lib/log.js` | 日志形状、日期与时间查询、固定规则文案 | `LOG_DIR_NAME` `LOG_MAX_DEPTH` `DEFAULT_SUMMARY_MAX_CHARS` `LOG_DESCS` `logRules` `logReadRules` 等 |
 | `lib/document.js` | YAML ↔ 文档对象 | `parseDocument` `serializeDocument` |
 | `lib/model.js` | 常量、字段校验、节点与文档构造 | `MAX_DEPTH` `RESERVED_KEYS` `INJECT_IGNORE_OPTIONS` `INJECT_IGNORE_LEVELS` `SCOPES` `createNode` `createDocument` `cloneDocument` `normalizeScope` `normalizeKind` 等 |
-| `lib/tree.js` | 标题树查找与改写 | `walk` `findNode` `findSiblings` `touchPath` `renameHeading` |
+| `lib/tree.js` | 标题树查找与改写 | `walk` `findNode` `findSiblings` `touchPath` `renameHeading` `reorderHeadings` |
 | `lib/text.js` | 文本规范化、`update_at` 时间戳格式与错误文案拼装 | `normalizeBody` `normalizeFragment` `normalizeMetaLine` `normalizeMetaBlock` `localTimestamp` `formatFailureText` |
 | `lib/path.js` | 标题路径 | `PATH_SEPARATOR` `normalizeHeadingPath` `headingLabel` |
 | `lib/hash.js` | 哈希 | `hashText` `shortHash` |
@@ -224,6 +224,7 @@ node test/dump.mjs
 - 保存只替换**刚保存的那一半**草稿，另一半（还没保存的正文或描述）留在原处——把整份草稿重建成磁盘状态等于抹掉用户正在写的东西。
 - 保存按钮用 `inFlight` ref 挡重复点击：回车和按钮能在同一次渲染里各触发一次，`busy` 那时还是 `false`。
 - 切作用域 / 切货架时清空选中项**连同草稿**（待删标题、待建卡片、待加关键词），否则在 A 上标了要删的标题、切到 B 一保存就会把 A 的路径发出去。
+- **标题拖动只重排同级兄弟，只对 memory 文件开放**（日志的标题由插件按日期组织）。拖动状态全在草稿里：`reorders` 是 `{ 父路径的 JSON.stringify: [标题顺序] }`，`headingDrag()` 只改它、不碰 `nodes`，保存时转成 `order: [{ parent, titles }]` 一起发出去；`fileDirty('content')` 要把 `Object.keys(reorders).length > 0` 算进去，否则拖完还是「没改」。`ui/client.file.js` 的 `orderNodes()` 是画的时候唯一的应用点——它把 `reorders` 里那一层排前面、漏掉的按原顺序补后面，所以面板看不见的标题（正在输入的名字、别的标签页新加的兄弟）不会凭空消失；后端 `patchFile` 的 `request.order` 必须排在改名、删除、新建**之后**才收尾，否则会被 `set` / `delete` 打乱。
 
 ## 12. 设置路由
 
@@ -235,7 +236,7 @@ GET  …&scope=Global&file=<名>&kind=log
 GET  …&preset=<名>
      → 上面那份 + { preset: { name, text } }
 POST …                    ← { logSummaryMaxChars: 400 }           改配置
-POST …?session=<id>       ← { file: { scope, fileName, kind, newFileName?, desc?, format?, injectIgnore?, nodes, newNodes?, removed? } }
+POST …?session=<id>       ← { file: { scope, fileName, kind, newFileName?, desc?, format?, injectIgnore?, nodes, newNodes?, removed?, order? } }
 POST …?session=<id>       ← { create: { scope, kind, fileName } }
 POST …?session=<id>       ← { remove: { scope, kind, fileName } }
 POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove', name, text? } }

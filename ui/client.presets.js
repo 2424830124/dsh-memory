@@ -3,9 +3,13 @@
  *
  * 左栏：最上面是「DSH 默认身份」卡片，下面是新建按钮/输入框和预设清单；
  * 每行尾部只有删除（×），选中谁只是「在查看」，不代表「在用」。
- * 右栏：「修改 / 预览」两块——「使用 / 使用中」在修改那块的表头，默认身份的
- * 「使用」在它自己卡片的右侧。换掉正在用的那份会打断前缀缓存，所以表头先亮
- * 一条警告，确认后才切换。
+ * 右栏：「修改 / 预览」两块。换掉正在用的那份会打断前缀缓存，所以那一下不当场
+ * 生效，但两处反问的方式不一样：
+ * - 编辑栏头的「使用」先在表头亮一条警告行（「可能破坏前缀缓存」+ 确认切换 + 取消），
+ *   按确认才切换；
+ * - 「DSH 默认身份」卡片右边那个「使用」不亮警告——它自己就地变成红色的「确认切换」，
+ *   再点一次才切换，点窗口别处就算取消（撤回那个悬着的按钮在 `ui/client.js` 的
+ *   pointerdown 监听里）。
  *
  * 这里只有「拿 props 返回 vnode」的纯函数：没有 hooks、没有 state，
  * 全部样式与回调都在主包 `ui/client.js` 里。
@@ -60,6 +64,7 @@ window.__ModuleLoader__.load({
         busy,
         creating,
         createText,
+        armed,
         switching,
         confirming,
         onPick,
@@ -102,8 +107,9 @@ window.__ModuleLoader__.load({
         cursor: 'default',
       }
 
-      // 警告一律用错误色：这是「会打断缓存」的提示，不是普通提醒。
+      // 确认态用错误色：这一下会打断前缀缓存，得让人一眼看出和前一下不一样。
       const warnColor = 'var(--dsw-alias-state-error-primary)'
+      // 表头那条警告行：说清楚代价，确认/取消并排放在右边。
       const warnBarStyle = {
         display: 'flex',
         flex: '1 1 auto',
@@ -130,6 +136,7 @@ window.__ModuleLoader__.load({
         border: `1px solid ${warnColor}`,
         color: 'var(--dsw-alias-label-inverse)',
         fontWeight: 600,
+        cursor: 'pointer',
       }
       const useCancelStyle = {
         ...useButtonStyle,
@@ -160,7 +167,40 @@ window.__ModuleLoader__.load({
         color: picked === '' ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-label-primary)',
       }
 
-      /** @returns {object[]|object|null} 换预设时的那条警告行。 */
+      /**
+       * 「使用」按钮，只给「DSH 默认身份」那一块用：点一下原地变成「确认切换」，
+       * 再点一下才真的换过去。
+       *
+       * 不另起一行警告——多点一下的那只手就停在原地，不会因为按钮换了个位置
+       * 而点偏。点窗口别处就是取消，那个监听在 `ui/client.js`。
+       *
+       * @param {string} name - 预设名，`''` 表示 DSH 默认身份。
+       * @returns {object} the use button, in whichever of its two states.
+       */
+      const useControl = (name) => (armed === name
+        ? h('button', {
+          key: 'use',
+          type: 'button',
+          className: 'dsm-hover',
+          style: useConfirmStyle,
+          disabled: busy,
+          'data-dsm-armed': '1',
+          onClick: onUseConfirm,
+        }, t('presets.switchConfirm'))
+        : h('button', {
+          key: 'use',
+          type: 'button',
+          className: 'dsm-hover',
+          style: useButtonStyle,
+          disabled: busy,
+          onClick: () => onUse(name),
+        }, t('presets.use')))
+
+      /**
+       * 编辑栏头的那条警告行：编辑一份预设再点「使用」时亮出来，带着确认与取消。
+       *
+       * @returns {object|null} 没在等确认时是 null。
+       */
       const warnBar = switching
         ? h('div', { style: warnBarStyle },
           h('span', { style: warnTextStyle }, t('presets.switchWarning')),
@@ -251,14 +291,7 @@ window.__ModuleLoader__.load({
         h('span', { style: defaultNameStyle }, t('presets.defaultIdentity'))),
         selected === ''
           ? h('span', { key: 'used', style: useTagStyle }, t('presets.inUse'))
-          : h('button', {
-            key: 'use',
-            type: 'button',
-            className: 'dsm-hover',
-            style: useButtonStyle,
-            disabled: busy,
-            onClick: () => onUse(''),
-          }, t('presets.use')))
+          : useControl(''))
 
       const rail = h('div', { style: railStyle },
         defaultRow,
@@ -320,8 +353,7 @@ window.__ModuleLoader__.load({
       const defaultView = h('div', { style: panesStyle },
         h('div', { style: { ...paneStyle, gridColumn: '1 / -1' } },
           h('div', { style: paneHeadStyle },
-            paneCaption(UI.IconContextInjectionOutlineRegular, t('presets.defaultIdentity')),
-            warnBar),
+            paneCaption(UI.IconContextInjectionOutlineRegular, t('presets.defaultIdentity'))),
           h('p', { style: textStyle }, t('presets.defaultHint'))))
 
       /** @returns {object} 选了一份预设时的右栏：修改与预览。 */

@@ -320,6 +320,60 @@ await check('面板删除标题：整支一起摘掉，改名后的路径不再�
   )
 })
 
+await check('面板拖动标题：同级重排落盘，日志拒绝', async () => {
+  const { store, workspace } = await sandbox()
+  await store.write(store.globalDir, 'Global', {
+    fileName: '排序',
+    desc: '',
+    format: '',
+    scope: 'Global',
+    injectIgnore: [],
+    roots: new Map([
+      ['甲', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map() }],
+      ['乙', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map([['乙一', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map() }], ['乙二', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map() }]]) }],
+      ['丙', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map() }],
+    ]),
+    source: '',
+  })
+  const runtime = runtimeFor(store, workspace)
+  const body = await runtime.patchFile({
+    scope: 'Global',
+    fileName: '排序',
+    kind: 'memory',
+    // 只报了两个：没报的「丙」留在原位跟在后面，不会凭空消失。
+    order: [{ parent: [], titles: ['丙', '甲'] }],
+  })
+  assert.deepEqual(body.tree.map((node) => node.title), ['丙', '甲', '乙'])
+
+  // 第二层单独排，和第一层互不影响。
+  const deeper = await runtime.patchFile({
+    scope: 'Global',
+    fileName: '排序',
+    order: [{ parent: ['乙'], titles: ['乙二', '乙一'] }],
+  })
+  const 乙 = deeper.tree.find((node) => node.title === '乙')
+  assert.deepEqual(乙.children.map((node) => node.title), ['乙二', '乙一'])
+  assert.deepEqual(deeper.tree.map((node) => node.title), ['丙', '甲', '乙'])
+
+  // 落盘的是顺序本身，不是面板那份临时状态。
+  const reloaded = await runtime.fileText({ scope: 'Global', fileName: '排序' })
+  assert.ok(reloaded.text.indexOf('丙') < reloaded.text.indexOf('甲'))
+  assert.ok(reloaded.text.indexOf('甲') < reloaded.text.indexOf('乙'))
+
+  await store.write(store.globalDir, 'Global', {
+    fileName: '2026-01-02',
+    desc: '',
+    scope: 'Global',
+    kind: 'log',
+    roots: new Map([['2026-01-02', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map([['09:00 早', { update_at: '2026-01-01T00:00:00.000Z', desc: '', keyword: [], children: new Map() }]]) }]]),
+    source: '',
+  })
+  await assert.rejects(
+    () => runtime.patchFile({ scope: 'Global', kind: 'log', fileName: '2026-01-02', order: [{ parent: ['2026-01-02'], titles: ['09:00 早'] }] }),
+    /不能调顺序/,
+  )
+})
+
 await check('目录里出现坏文件时不参与组装且能报错', async () => {
   const { store } = await sandbox()
   await writeFile(join(store.globalDir, 'broken.yaml'), 'meta_data:\n  file_name: 坏的\ndata:\n  desc: 不行\n', 'utf8')
