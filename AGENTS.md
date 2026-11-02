@@ -6,7 +6,7 @@
 
 DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文件（标题树），插件把它注入提示词，给模型三个工具读写，并按会话活动状态合并检查别的会话改动后发不唤醒通知。另有一份按天分文件的**日志**（短期记忆）。
 
-还有一份**预设目录**（`<dataDir>/preset/*.md`，纯文本）：每个会话可以选一份，选中后它会整体替换掉宿主的 harness identity（提示词最开头那句）。预设不是记忆——不参与 `inject_ignore`、日志或工具，只是开场身份的一层皮；人设卡、行为准则这类一整段的开头文本都放这里。发行包里自带几份起步预设（仓库的 `presets/*.md`），第一次启动时由 `seedPresets()` 拷进这个目录，只补没见过的名字。
+还有一份**预设目录**（`<dataDir>/preset/*.md`，纯文本）：每个会话可以选一份，选中后它会整体替换掉宿主的 harness identity（提示词最开头那句）。预设不是记忆——不参与 `inject_ignore`、日志或工具，只是开场身份的一层皮；人设卡、行为准则这类一整段的开头文本都放这里。**插件不自带预设**：发行包里没有 `presets/`，安装后这个目录是空的，只有用户自己放进去的 `*.md`；曾经有过 `seedPresets()` 从包里播种，已经删掉了（用户要求不预置内容），别再往包里塞预设。
 
 - 做：提示词注入（记忆 + 预设）、读写工具、跨会话通知、按日日志、设置面板（含「预设」页签）。
 - 不做：自动召回、删除记忆目录、跨层级移动章节、删除日志。
@@ -48,7 +48,6 @@ node test/dump.mjs
 | `lib/log-injection.js` | 纯日志注入选择策略：空日过滤、最近天数窗口、详细日选择 | `selectLogInjection` |
 | `lib/prompt-override.js` | 纯策略：把记忆写进宿主 persona 前缀段、把预设写进 harness identity（组装结果的原地改写） | `PERSONA_SECTION` `HARNESS_IDENTITY_SECTION` `overridePersona` `overrideHarnessIdentity` |
 | `lib/preset.js` | 预设目录（`*.md`）的加载、热加载、名字校验与读写，按会话的选择与持久化 | `PRESET_DIR_NAME` `PresetStore` `normalizePresetName` `readPresetSelection` `writePresetSelection` `clearPresetSelection` |
-| `lib/seed-presets.js` | 把包里的 `presets/*.md` 拷进用户的预设目录，标记已给过的名字，从不覆盖 | `SEED_MARKER_NAME` `seedPresets` |
 | `lib/notification-scheduler.js` | 跨会话通知检查节奏：目录 revision、活动 agent、空闲用户边界与共享轮询器 | `MemoryNotificationScheduler` `NOTIFICATION_POLL_MS` |
 | `lib/tools.js` | 三个工具的定义与参数校验 | `TOOL_NAMES` `readTool` `editTool` `manageTool` `renderEditDescription` |
 | `lib/store.js` | 磁盘门面，把 cache/watch/writer 拼起来 | `MemoryStore` |
@@ -180,7 +179,7 @@ node test/dump.mjs
 - 乐观锁读的是**原路径**（`baseRelative`）：面板改名时新路径上还没文件，只按新路径算哈希会得到 `undefined`，锁就被跳过了。文件在中间被别人删掉是**报错**而不是静默重建；改名后旧文件删不掉也报错（"请手动删掉，否则会同时存在两份"）。
 - 外部改动 → `reloadFile` → `onChange` → `runtime.broadcast(directory)` → 给能看见该目录的会话算通知。
 - 预设不走记忆的 cache/watch/writer：`lib/preset.js` 自己看 `<dataDir>/preset/*.md`（200ms 防抖），整份文本按 UTF-8 读进内存；读失败保留上一份，文件没了就是空串。选择文件在 `state/preset/<sessionId>.json`（原子写），会话 `attach()` 时读回。预设没有 YAML、没有标题、没有工具，别把它接进 `MemoryCache`。
-- 内置预设在 `apply()` 里、`PresetStore.start()` 之前复制：包里的 `presets/*.md` → `<dataDir>/preset/`，用 `COPYFILE_EXCL` 保证同名文件不被覆盖；`state/presets-seeded.json` 记着给过哪些名字，所以用户删掉的一份不会在下次启动时复活，升级后新增的内置预设仍会补上。复制失败只 warning，不挡插件加载。
+- 预设目录是**用户自己的**：`apply()` 只管 `PresetStore.start()`，不从包里拷任何东西。以前有过 `lib/seed-presets.js` + 包里的 `presets/*.md`，安装时按名字播种（`state/presets-seeded.json` 记录已给过的名字），0.3.7 起整块删掉了——用户要的就是「安装时不预置内容」。老版本留下的 `state/presets-seeded.json` 和 `preset/` 里的文件都不清，它们现在是普通用户文件。
 
 ## 10. 工具
 

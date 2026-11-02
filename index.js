@@ -16,13 +16,11 @@
 import z from '@deepseek-ai/schemastery'
 
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { CONFIG_FIELDS, defaultSettings } from './lib/config-schema.js'
 import { CONFIG_FILE_NAME, loadConfigFile } from './lib/config.js'
 import { resolveLayout } from './lib/paths.js'
 import { PRESET_DIR_NAME, PresetStore } from './lib/preset.js'
-import { seedPresets } from './lib/seed-presets.js'
 import { overrideHarnessIdentity, overridePersona } from './lib/prompt-override.js'
 import { MemoryRuntime } from './lib/runtime.js'
 import { SETTINGS_ROUTE, createSettingsHandler } from './lib/settings-route.js'
@@ -169,19 +167,7 @@ export function apply(ctx, config) {
     }
   }, 'memory.watch()')
 
-  // 内置预设：包里的 `presets/*.md` 在第一次启动时拷进用户的预设目录。只拷
-  // 没见过的名字（`state/presets-seeded.json` 记着给过哪些），所以改过的不会被
-  // 覆盖，删掉的也不会再冒出来；后来版本新增的预设仍会补上。
-  const bundledPresets = fileURLToPath(new URL('./presets/', import.meta.url))
-  seedPresets({
-    sourceDir: bundledPresets,
-    targetDir: join(store.dataDir, PRESET_DIR_NAME),
-    stateDir: store.stateDir,
-    warn,
-  })
-    .catch((error) => warn(`memory: 复制内置预设失败 ${error?.message ?? error}`))
-    .then(() => presets.start())
-    .catch((error) => warn(`memory: 初始化预设目录失败 ${error?.message ?? error}`))
+  presets.start().catch((error) => warn(`memory: 初始化预设目录失败 ${error?.message ?? error}`))
   runtime.start().catch((error) => warn(`memory: 初始化失败 ${error?.message ?? error}`))
 
   // The settings panel needs somewhere to save to. A profile without a Web

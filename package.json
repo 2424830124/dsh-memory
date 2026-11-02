@@ -15,7 +15,6 @@
     "index.js",
     "ui/*.js",
     "lib/*.js",
-    "presets/*.md",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

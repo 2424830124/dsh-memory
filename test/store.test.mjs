@@ -12,7 +12,6 @@ import { CONFIG_FILE_NAME, loadConfigFile } from '../lib/config.js'
 import { parseDocument } from '../lib/document.js'
 import { resolveLayout } from '../lib/paths.js'
 import { PresetStore } from '../lib/preset.js'
-import { seedPresets } from '../lib/seed-presets.js'
 import { MemoryStore } from '../lib/store.js'
 import { MemoryRuntime } from '../lib/runtime.js'
 import { renderInjection } from '../lib/render.js'
@@ -1243,37 +1242,6 @@ await check('预设新建、保存、删除都落盘，重名和非法名字被�
 
   presets.dispose()
   await rm(dir, { recursive: true, force: true })
-})
-
-await check('内置预设只在第一次出现：不覆盖同名文件，删掉的不会自己回来', async () => {
-  const source = await mkdtemp(join(tmpdir(), 'dsh-memory-seed-src-'))
-  const target = await mkdtemp(join(tmpdir(), 'dsh-memory-seed-dst-'))
-  const state = await mkdtemp(join(tmpdir(), 'dsh-memory-seed-state-'))
-  await writeFile(join(source, '甲.md'), '内置甲', 'utf8')
-  await writeFile(join(source, '乙.md'), '内置乙', 'utf8')
-  await writeFile(join(source, '说明.txt'), '不是预设', 'utf8')
-
-  // 用户自己已经有一份同名的：保留用户的，不覆盖。
-  await writeFile(join(target, '甲.md'), '我自己的甲', 'utf8')
-  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), ['乙'])
-  assert.equal(await readFile(join(target, '甲.md'), 'utf8'), '我自己的甲')
-  assert.equal(await readFile(join(target, '乙.md'), 'utf8'), '内置乙')
-
-  // 第二次启动什么都不做。
-  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), [])
-
-  // 删掉内置的那份，再启动不会被重新种回来。
-  await rm(join(target, '乙.md'), { force: true })
-  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), [])
-  await assert.rejects(() => readFile(join(target, '乙.md'), 'utf8'), /ENOENT/)
-
-  // 新版本新增的内置预设仍会补上。
-  await writeFile(join(source, '丙.md'), '内置丙', 'utf8')
-  assert.deepEqual(await seedPresets({ sourceDir: source, targetDir: target, stateDir: state, warn: () => {} }), ['丙'])
-
-  await rm(source, { recursive: true, force: true })
-  await rm(target, { recursive: true, force: true })
-  await rm(state, { recursive: true, force: true })
 })
 
 await check('预设按会话选择并持久化：空选择回退原生 identity，重开还是同一份', async () => {
