@@ -16,6 +16,8 @@
     "ui/*.js",
     "lib/*.js",
     "cordis.patch.yml",
+    "defaults/BOOTSTRAP.md",
+    "defaults/memory/*.yaml",
     "locale/*.json",
     "icon.svg",
     "docs/*.md",
@@ -45,7 +47,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/notification-scheduler.test.mjs",
+    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/bootstrap.test.mjs test/notification-scheduler.test.mjs",
     "test:live": "node test/live.mjs",
     "dump": "node test/dump.mjs"
   },

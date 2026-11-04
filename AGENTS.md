@@ -8,7 +8,9 @@ DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文
 
 还有一份**预设目录**（`<dataDir>/preset/*.md`，纯文本）：每个会话可以选一份，选中后它会整体替换掉宿主的 harness identity（提示词最开头那句）。预设不是记忆——不参与 `inject_ignore`、日志或工具，只是开场身份的一层皮；人设卡、行为准则这类一整段的开头文本都放这里。**插件不自带预设**：发行包里没有 `presets/`，安装后这个目录是空的，只有用户自己放进去的 `*.md`；曾经有过 `seedPresets()` 从包里播种，已经删掉了（用户要求不预置内容），别再往包里塞预设。
 
-- 做：提示词注入（记忆 + 预设）、读写工具、跨会话通知、按日日志、设置面板（含「预设」页签）。
+包里带的是另一种东西：`defaults/memory/*.yaml`（六份起步的记忆文件）和 `defaults/BOOTSTRAP.md`（出生清单）。它们在第一次启动时写进数据目录，详见 §16。别把这两件事混起来——**预设不预置，记忆预置**。
+
+- 做：提示词注入（记忆 + 预设 + 出生清单）、读写工具、跨会话通知、按日日志、首次安装的默认内容、设置面板（含「预设」页签）。
 - 不做：自动召回、删除记忆目录、跨层级移动章节、删除日志。
 - 运行时依赖 `yaml` 和 `@deepseek-ai/schemastery`（宿主同款的配置 schema 库；`link:` 安装时它必须也是本包的依赖，否则从仓库目录解析不到）。ESM，无构建步骤，`"type": "module"`。
 
@@ -21,8 +23,8 @@ DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文
 ## 2. 跑起来
 
 ```bash
-# 六份离线测试，不需要宿主（这是主要的验证手段）
-node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/notification-scheduler.test.mjs
+# 七份离线测试，不需要宿主（这是主要的验证手段）
+node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/bootstrap.test.mjs test/notification-scheduler.test.mjs
 
 # 需要在真实宿主里跑：逐条验证三个工具的成功与错误路径
 node test/live.mjs
@@ -48,6 +50,8 @@ node test/dump.mjs
 | `lib/log-injection.js` | 纯日志注入选择策略：空日过滤、最近天数窗口、详细日选择 | `selectLogInjection` |
 | `lib/prompt-override.js` | 纯策略：把记忆写进宿主 persona 前缀段、把预设写进 harness identity（组装结果的原地改写） | `PERSONA_SECTION` `HARNESS_IDENTITY_SECTION` `overridePersona` `overrideHarnessIdentity` |
 | `lib/preset.js` | 预设目录（`*.md`）的加载、热加载、名字校验与读写，按会话的选择与持久化 | `PRESET_DIR_NAME` `PresetStore` `normalizePresetName` `readPresetSelection` `writePresetSelection` `clearPresetSelection` |
+| `lib/bootstrap.js` | 出生清单 `BOOTSTRAP.md` 的同步首读、监听热加载、`status: complete` 后自删 | `BOOTSTRAP_FILE_NAME` `BOOTSTRAP_COMPLETE` `BootstrapStore` `parseBootstrapStatus` `bootstrapBody` |
+| `lib/defaults.js` | 首装默认内容：把包里的 `defaults/memory/*.yaml` 与 `defaults/BOOTSTRAP.md` 播种到数据目录，`state/defaults-seeded.json` 记账 | `DEFAULTS_DIR_NAME` `DEFAULTS_MEMORY_DIR` `SEED_MARKER_NAME` `seedDefaults` |
 | `lib/notification-scheduler.js` | 跨会话通知检查节奏：目录 revision、活动 agent、空闲用户边界与共享轮询器 | `MemoryNotificationScheduler` `NOTIFICATION_POLL_MS` |
 | `lib/tools.js` | 三个工具的定义与参数校验 | `TOOL_NAMES` `readTool` `editTool` `manageTool` `renderEditDescription` |
 | `lib/store.js` | 磁盘门面，把 cache/watch/writer 拼起来 | `MemoryStore` |
@@ -104,6 +108,8 @@ node test/dump.mjs
 - 这条路线只适合按会话冻结的文本：记忆每轮都变的话，前缀缓存会被逐轮打掉。**预设是唯一例外**：切预设或改预设文件，下一次组装就直接生效（目录监听 + 200ms 防抖），代价是这一轮前缀缓存作废——这是明确的取舍，不是漏了冻结。
 - 预设选择按会话存在 `state/preset/<sessionId>.json`，面板「预设」页签和 `MemoryRuntime.setPreset()` 是仅有的写入口；名字必须对应 `preset/` 下一份 `.md`，找不到就报错。
 - 设置里的 `defaultPreset` 只在会话 `attach()` 且它还没有选择文件时写一次（`applyDefaultPreset()`）：它是「新会话从哪份开始」，不是「所有会话都改成这份」。之后改默认值不会倒改已经开过的会话，指向的文件被删掉就安静地当没有。
+- **出生清单和记忆共用 persona 前缀段，排在记忆前面**（`runtime.bootstrapText()` + `runtime.sectionText()` 用 `\n\n` 拼起来，一次 `overridePersona()` 写进去）。清单说的是「这一轮该补什么」，记忆说的是「我已经是谁」，先读清单才谈得上按它填记忆。
+- 清单**不冻结**，每轮现取：它是一份所有会话看到都一样的静态文件，pending 期间不会移动前缀边界；被删掉那一下前缀变一次，正好是「第一轮任务结束了」那一刻。清单在、persona 段却不在时用 `overridePersona(…, { insertMissing: true })` 补一段——它必须被读到；只有记忆时不补，宁可留着宿主原生 persona。
 
 格式：一句 `The following is your own long-term memory.`（在标签外）+ `<memory>` 包住若干 `---` 分隔的文件块。文件头带 `file_name` / `desc` / `scope`；每个标题下是 `- Keyword:`、`- Update at:` 行，然后正文。
 
@@ -278,10 +284,22 @@ POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove
 - **`update_at` 落盘走 `lib/text.js` 的 `localTimestamp()`**：本地墙上时间带偏移（`2026-10-27T03:18:36+08:00`）。别用 `toISOString()`——那是 UTC，面板和提示词里都会和用户的钟差上几个小时；也别写成不带偏移的裸时间，换个时区就没法和别人的比。生成点只有两个：`runtime.js` 的 `writeEdit()` 和 `panel-service.js` 的 `patchFile()`。内部状态（快照 `updatedAt`、`touched`）仍是 ISO `Z`，那不给用户看。
 - 仓库有 git（`origin` = github.com/2424830124/dsh-memory），历史都在提交里；`.backup/` 是加 git 之前留的临时备份，已经清掉。
 - 中文文案统一用中文全角标点；报错要告诉模型"哪一份、哪个标题、为什么"，不要只说"失败"。
-- 新增行为优先补测试（六份离线 suite 是主要自动验证）；`test/live.mjs` 只在真实宿主里跑。
+- 新增行为优先补测试（七份离线 suite 是主要自动验证）；`test/live.mjs` 只在真实宿主里跑。
 - `locale/zh.json` / `locale/en.json` 是插件的元信息（面板外），面板内的文案在 `ui/client.js` 的 `DICTIONARIES`。
 
-## 16. 文档
+## 16. 首装默认内容与出生清单
+
+包里带 `defaults/`（不进运行时代码路径，只被 `lib/defaults.js` 读）：`defaults/memory/*.yaml` 六份起步记忆文件、`defaults/BOOTSTRAP.md` 出生清单。`index.js` 的启动序列是**先播种、再 `bootstrap.start()`、最后 `runtime.start()`**——顺序不能换，默认记忆文件必须在第一次读盘之前就落好，否则第一次组装的提示词是空的。
+
+- **播种只补空缺，绝不覆盖**：`copyFile` 之前先 `existsSync(target)`，存在就只记账不写。升级一份用了很久的安装时，这就是"加新文件、不动你的文件"。
+- **记账文件是 `state/defaults-seeded.json`**（`{version, memory: [...], bootstrap: true}`），不是"文件不在就补"：后者会把用户故意删掉的默认文件在下次启动时复活，等于跟用户抢目录。`MARKER_VERSION` 一升，整份记账作废。
+- `defaults/memory/*.yaml` 里放的是**真实内容**（用户把自己那份全局记忆定了性）：改这些文件等于改所有人的起步记忆，动之前先问。
+- 出生清单 `BOOTSTRAP.md` 的完成状态写在它自己的 frontmatter（`status: pending` → `status: complete`）。`BootstrapStore` 在**每次读盘**（同步首读、监听重载）时判一次，读到 complete 就 `rm` 掉并把注入文本清空——删不掉只是 warning，反正文本已经不在提示词里了。
+- 清单监听的是**数据目录**而不是文件（删掉的文件没法 watch），回调里按 `fileName === BOOTSTRAP_FILE_NAME` 过滤：同一个目录下还有 `.memory`、`state`、`preset`，不过滤会把每次记忆写入都当成清单变更。
+- 注入文本 = 一句英文说明（**带绝对路径**，模型要照着去改那份文件）+ 空行 + 正文（frontmatter 不进提示词）。路径不能省：`~/.dsh` 不是模型猜得到的地方。
+- 不改 `preset/`：预设仍然不预置（§9 最后一条），别把 `defaults/` 当成第二个预设播种器。
+
+## 17. 文档
 
 - [README.md](./README.md) —— 用户文档（安装、配置、面板、文件格式）。
 - `docs/` —— 落盘与返回形状的参照，不参与运行；形状变了要顺手改，测试不替它们兜底：

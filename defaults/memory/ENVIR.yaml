@@ -1,0 +1,14 @@
+meta_data:
+  file_name: ENVIR
+  desc: 环境相关信息，只注入一到二级标题，详细信息可用记忆读取工具获取
+  scope: Global
+  format: |-
+    _我需要记住我周围的环境_。
+    一级标题为分类，二级标题为具体信息，一、二级标题外的内容不注入。
+  inject_ignore:
+    - update_at
+    - keyword
+    - t3
+    - t1.desc
+    - t2.desc
+data: {}

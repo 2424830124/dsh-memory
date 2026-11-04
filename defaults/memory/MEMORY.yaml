@@ -1,0 +1,17 @@
+meta_data:
+  file_name: MEMORY
+  desc: 我的长期记忆
+  scope: Global
+  format: |-
+    _有什么让我印象深刻？那就记录在这里_。
+    和具体操作有关的条目禁止写在这里。
+  inject_ignore:
+    - update_at
+    - keyword
+data:
+  我印象深刻的:
+    update_at: 2026-11-02T17:15:29+08:00
+    desc: （暂无）
+  我们经历过的:
+    update_at: 2026-11-03T13:13:46+08:00
+    desc: （暂无）

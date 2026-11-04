@@ -52,6 +52,15 @@ npm install @huai_xin/dsh-memory
 
 运行时依赖 `yaml` 和 `@deepseek-ai/schemastery`（配置 schema 用）。
 
+## 首次安装
+
+安装包里带了一份**默认记忆内容**和一份**出生清单**，第一次启动时写进数据目录：
+
+- `defaults/memory/*.yaml` → `~/.dsh/dsh-memory/.memory/`：六份起步的记忆文件（`SOUL` / `ME` / `HIM` / `MEMORY` / `ENVIR` / `SKILL`），里面填的是占位（`（暂无）`）和几条基本规则。**已经有同名的文件就不覆盖**——升级一份用了一阵的安装时，这些默认文件只补空缺。
+- `defaults/BOOTSTRAP.md` → `~/.dsh/dsh-memory/BOOTSTRAP.md`：一份出生清单，写着"先跟用户把灵魂、身份、关系聊出来，再一项项写回记忆"。它在的时候，每一轮组装都放在提示词最前面（连着文件路径一起给，模型可以直接改它）；文件不在就什么都不加。
+
+清单的完成状态写在它自己的 frontmatter 里：全部写回之后把 `status: pending` 改成 `status: complete`，插件读到就把它删掉，提示词里也就不再有它。**删掉之后不会被重新播种**：哪个默认文件已经给过，记在 `state/defaults-seeded.json` 里，所以自己删掉的文件不会在下次启动时冒出来。
+
 ## 配置
 
 配置写在插件的数据目录里，和它配置的东西挨着：
@@ -103,9 +112,11 @@ npm install @huai_xin/dsh-memory
 ```
 ~/.dsh/dsh-memory/.memory/*.yaml        Global 记忆文件（所有工作区可见）
 ~/.dsh/dsh-memory/.memory/log/*.yaml    Global 日志（一天一个）
+~/.dsh/dsh-memory/BOOTSTRAP.md          出生清单（装好就有，做完自动删）
 ~/.dsh/dsh-memory/preset/*.md           预设（文件名就是预设名）
 ~/.dsh/dsh-memory/state/sessions/*.json 每个会话一份快照
 ~/.dsh/dsh-memory/state/preset/*.json   每个会话选了哪一份预设
+~/.dsh/dsh-memory/state/defaults-seeded.json  已经给过哪些默认文件
 <workspace>/.memory/*.yaml              Workspace 记忆文件（只对当前工作区可见）
 <workspace>/.memory/log/*.yaml          Workspace 日志
 ```

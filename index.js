@@ -16,9 +16,12 @@
 import z from '@deepseek-ai/schemastery'
 
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+import { BootstrapStore } from './lib/bootstrap.js'
 import { CONFIG_FIELDS, defaultSettings } from './lib/config-schema.js'
 import { CONFIG_FILE_NAME, loadConfigFile } from './lib/config.js'
+import { DEFAULTS_DIR_NAME, seedDefaults } from './lib/defaults.js'
 import { resolveLayout } from './lib/paths.js'
 import { PRESET_DIR_NAME, PresetStore } from './lib/preset.js'
 import { overrideHarnessIdentity, overridePersona } from './lib/prompt-override.js'
@@ -142,9 +145,16 @@ export function apply(ctx, config) {
   // 这里只提供 `runtime.setPreset()`。
   const presets = new PresetStore({ dir: join(store.dataDir, PRESET_DIR_NAME), warn })
 
+  // 出生清单：`<dataDir>/BOOTSTRAP.md`，安装后第一次会话要用的那份问题清单。
+  // 文件在，每一轮组装都把它放在提示词最前面；文件不在（从没给过，或者清单
+  // 做完被删了）就什么都不加。清单的完成状态写在它自己的 frontmatter 里，
+  // 模型把 `status` 改成 `complete`，下一次读盘就把它删掉。
+  const bootstrap = new BootstrapStore({ dir: store.dataDir, warn })
+
   const runtime = new MemoryRuntime({
     store,
     presets,
+    bootstrap,
     // The resolved settings are handed over whole: the runtime reads the keys it
     // needs, so a field added to `Config` reaches it without a second list here.
     // 取服务推迟到调用时：本插件可能比 workingDirectory 先挂上，启动那一刻它是空的。
@@ -164,11 +174,25 @@ export function apply(ctx, config) {
       runtime.stop()
       store.dispose()
       presets.dispose()
+      bootstrap.dispose()
     }
   }, 'memory.watch()')
 
+  // 先补默认内容、再加载 Global 目录：默认记忆文件必须在第一次读盘之前就落好，
+  // 否则第一次组装的提示词里是空的，要等到下一次重载才看得到。清单同步读，
+  // 所以安装后的第一轮组装就带着它。
   presets.start().catch((error) => warn(`memory: 初始化预设目录失败 ${error?.message ?? error}`))
-  runtime.start().catch((error) => warn(`memory: 初始化失败 ${error?.message ?? error}`))
+  void (async () => {
+    await seedDefaults({
+      defaultsDir: fileURLToPath(new URL(`./${DEFAULTS_DIR_NAME}/`, import.meta.url)),
+      dataDir: store.dataDir,
+      globalDir: store.globalDir,
+      stateDir: store.stateDir,
+      warn,
+    })
+    await bootstrap.start()
+    await runtime.start()
+  })().catch((error) => warn(`memory: 初始化失败 ${error?.message ?? error}`))
 
   // The settings panel needs somewhere to save to. A profile without a Web
   // server (a headless run) simply has no panel, which is not a failure.
@@ -180,10 +204,10 @@ export function apply(ctx, config) {
     }), 'memory.settingsRoute()')
   })
 
-  // 注入不注册自己的分节，而是改写组装好的结果：记忆写进宿主 persona 前缀段
-  //（`deployment:persona-prefix`，order 0），选中的预设写进 harness identity
-  //（`harness:identity`，order -1000）。两段换完之后，提示词最开头就是预设和
-  // 记忆，原来的 persona 与 identity 都不在了。
+  // 注入不注册自己的分节，而是改写组装好的结果：记忆（以及存在时的出生清单）
+  // 写进宿主 persona 前缀段（`deployment:persona-prefix`，order 0），选中的预设
+  // 写进 harness identity（`harness:identity`，order -1000）。两段换完之后，
+  // 提示词最开头就是清单、记忆和预设，原来的 persona 与 identity 都不在了。
   //
   // 不能自己注册同名分节：分节按作用域分层，preset 已经在这个会话的 agent
   // 作用域里注册了 persona 段，再注册会撞 "already registered"；harness
@@ -201,8 +225,16 @@ export function apply(ctx, config) {
   ctx.effect(() => ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const settled = await next()
     try {
-      const memory = overridePersona(settled, runtime.sectionText(context))
-      return overrideHarnessIdentity(memory, runtime.presetText(context))
+      // 出生清单排在记忆前面：清单说的是「这一轮该补什么」，记忆说的是「我已经
+      // 是谁」，先读清单才谈得上按它去填记忆。清单在就有、删了就没了，因此这
+      // 一段是每轮现取的；记忆仍然按会话冻结。
+      const checklist = runtime.bootstrapText()
+      const memory = runtime.sectionText(context)
+      const prefix = [checklist, memory].filter((part) => part !== '').join('\n\n')
+      // 清单必须被读到，所以 persona 段不在时补一段；只有记忆时不补，宁可留着
+      // 宿主原生的 persona。
+      const rewritten = overridePersona(settled, prefix, { insertMissing: checklist !== '' })
+      return overrideHarnessIdentity(rewritten, runtime.presetText(context))
     } catch (error) {
       warn(`memory: 改写提示词前缀失败 ${error?.message ?? error}`)
       return settled

@@ -1,0 +1,13 @@
+meta_data:
+  file_name: SKILL
+  desc: 重复或重要任务中提炼出来的技能，使用记忆读取工具获取详细信息。
+  scope: Global
+  format: |-
+    _我学会了原本不会或不清楚的？那就提炼出来_。
+    一级标题写对应技能的描述或概括，正文写对应技能的步骤以及细节，一级标题以下的所有内容不注入。
+  inject_ignore:
+    - update_at
+    - keyword
+    - t1.desc
+    - t2
+data: {}
