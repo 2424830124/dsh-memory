@@ -49,7 +49,7 @@ node test/dump.mjs
 | `lib/file-order.js` | 统一提示词注入和面板列表共用的文件排序策略 | `orderByConfig` |
 | `lib/log-injection.js` | 纯日志注入选择策略：空日过滤、最近天数窗口、详细日选择 | `selectLogInjection` |
 | `lib/prompt-override.js` | 纯策略：把记忆写进宿主 persona 前缀段、把预设写进 harness identity（组装结果的原地改写） | `PERSONA_SECTION` `HARNESS_IDENTITY_SECTION` `overridePersona` `overrideHarnessIdentity` |
-| `lib/preset.js` | 预设目录（`*.md`）的加载、热加载、名字校验与读写，按会话的选择与持久化 | `PRESET_DIR_NAME` `PresetStore` `normalizePresetName` `readPresetSelection` `writePresetSelection` `clearPresetSelection` |
+| `lib/preset.js` | 预设目录（`*.md`）的加载、热加载、名字校验与读写，按会话的选择与持久化 | `PRESET_DIR_NAME` `PresetStore` `normalizePresetName` `readPresetSelection` `writePresetSelection` |
 | `lib/bootstrap.js` | 出生清单 `BOOTSTRAP.md` 的同步首读、监听热加载、`status: complete` 后自删 | `BOOTSTRAP_FILE_NAME` `BOOTSTRAP_COMPLETE` `BootstrapStore` `parseBootstrapStatus` `bootstrapBody` |
 | `lib/defaults.js` | 首装默认内容：把包里的 `defaults/memory/*.yaml` 与 `defaults/BOOTSTRAP.md` 播种到数据目录，`state/defaults-seeded.json` 记账 | `DEFAULTS_DIR_NAME` `DEFAULTS_MEMORY_DIR` `SEED_MARKER_NAME` `seedDefaults` |
 | `lib/notification-scheduler.js` | 跨会话通知检查节奏：目录 revision、活动 agent、空闲用户边界与共享轮询器 | `MemoryNotificationScheduler` `NOTIFICATION_POLL_MS` |
@@ -107,7 +107,9 @@ node test/dump.mjs
 - 两段都写成 `interpolate: false`：记忆/预设里出现 `{{…}}` 不会被当成宿主变量。
 - 这条路线只适合按会话冻结的文本：记忆每轮都变的话，前缀缓存会被逐轮打掉。**预设是唯一例外**：切预设或改预设文件，下一次组装就直接生效（目录监听 + 200ms 防抖），代价是这一轮前缀缓存作废——这是明确的取舍，不是漏了冻结。
 - 预设选择按会话存在 `state/preset/<sessionId>.json`，面板「预设」页签和 `MemoryRuntime.setPreset()` 是仅有的写入口；名字必须对应 `preset/` 下一份 `.md`，找不到就报错。
-- 设置里的 `defaultPreset` 只在会话 `attach()` 且它还没有选择文件时写一次（`applyDefaultPreset()`）：它是「新会话从哪份开始」，不是「所有会话都改成这份」。之后改默认值不会倒改已经开过的会话，指向的文件被删掉就安静地当没有。
+- 设置里的 `defaultPreset` 是**实时兜底值，不是抄录**：一个会话只要没定住，`presetName()` 每次都现读它，所以改设置立刻反映到**所有还没开口的草稿会话**，不管哪个工作区、那个草稿会话是多久以前开的。钉住只发生在两件事上——用户显式选了（`setPreset()`）、或这个会话第一次收到真实用户消息（`settlePreset()`，在 `onUserMessage()` 里）——钉住时把当时的名字写进 `state/preset/<sessionId>.json`（`''` 也写，表示「明确不用」）。之后改默认值不会倒改它们，指向的文件被删掉就安静地当没有。
+- 别把它改回「`attach()` 时写一次」：工作区的新会话页会长期复用同一个草稿会话 id，attach 时写死 = 那个工作区的新会话永远停在第一次打开时的默认值。这正是它当初的 bug。
+- `readPresetSelection()` 的三个返回值都是有意义的，别再合并：`undefined`（没文件/坏文件）= 没定住、跟随默认；`''`（文件里就是空）= 明确不用；名字 = 钉在这份。因此**没有**「清除选择文件」这条路（`clearPresetSelection` 已删）——删文件等于退回跟随默认，那是另一件事。
 - **出生清单和记忆共用 persona 前缀段，排在记忆前面**（`runtime.bootstrapText()` + `runtime.sectionText()` 用 `\n\n` 拼起来，一次 `overridePersona()` 写进去）。清单说的是「这一轮该补什么」，记忆说的是「我已经是谁」，先读清单才谈得上按它填记忆。
 - 清单**不冻结**，每轮现取：它是一份所有会话看到都一样的静态文件，pending 期间不会移动前缀边界；被删掉那一下前缀变一次，正好是「第一轮任务结束了」那一刻。清单在、persona 段却不在时用 `overridePersona(…, { insertMissing: true })` 补一段——它必须被读到；只有记忆时不补，宁可留着宿主原生 persona。
 

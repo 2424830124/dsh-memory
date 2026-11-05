@@ -1289,11 +1289,12 @@ await check('预设按会话选择并持久化：空选择回退原生 identity�
   await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
 })
 
-await check('设置里的默认预设：新会话 attach 时套用，已选过的会话不被改写', async () => {
+await check('设置里的默认预设：没开口的会话一直跟随它，开口后才定住', async () => {
   const { store, workspace } = await sandbox()
   const dir = join(store.dataDir, 'preset')
   await mkdir(dir, { recursive: true })
   await writeFile(join(dir, '角色.md'), '我是角色预设', 'utf8')
+  await writeFile(join(dir, '守则.md'), '我是守则预设', 'utf8')
   const presets = new PresetStore({ dir, warn: (message) => console.log(`       warn: ${message}`) })
   await presets.start()
 
@@ -1308,21 +1309,45 @@ await check('设置里的默认预设：新会话 attach 时套用，已选过�
     logger: { warn: (message) => console.log(`       warn: ${message}`) },
   })
 
-  const runtime = make('角色')
-  const agent = fakeAgent('default-session', workspace)
-  await runtime.attach(agent)
-  assert.equal(runtime.presetName(agent), '角色', '没有选择文件的新会话套用默认预设')
-  assert.equal(runtime.presetText({ agent }), '我是角色预设')
+  // 工作区里的「新会话页」会长期复用同一个草稿会话 id，所以这里模拟的正是那个
+  // 情形：同一个 id 被反复 attach，而设置里的默认值中途换了人。
+  const draft = fakeAgent('draft-session', workspace)
+  const first = make('角色')
+  await first.attach(draft)
+  assert.equal(first.presetName(draft), '角色', '没有选择文件的会话跟随默认预设')
+  assert.equal(first.presetText({ agent: draft }), '我是角色预设')
 
-  // 默认值后来被清掉，已经带上默认预设的会话还是原来那份：它已经有自己的选择文件了。
-  const later = make('')
-  await later.attach(fakeAgent('default-session', workspace))
-  assert.equal(later.presetText({ agent: { id: 'default-session' } }), '我是角色预设')
+  // 换一份默认值，同一个草稿会话重开一次：跟上新的一份，不被旧值钉住。
+  const second = make('守则')
+  const reopened = fakeAgent('draft-session', workspace)
+  await second.attach(reopened)
+  assert.equal(second.presetName(reopened), '守则', '草稿会话跟随最新的默认预设')
+  assert.equal(second.presetText({ agent: reopened }), '我是守则预设')
 
-  // 新会话在默认值清空后回到原生 identity。
-  const fresh = fakeAgent('fresh-session', workspace)
-  await later.attach(fresh)
-  assert.equal(later.presetName(fresh), '')
+  // 面板里显式选过才算定住：之后改默认值不再动它。
+  await second.setPreset(reopened, '角色')
+  const third = make('守则')
+  const again = fakeAgent('draft-session', workspace)
+  await third.attach(again)
+  assert.equal(third.presetName(again), '角色', '显式选过之后不再跟随默认预设')
+
+  // 开口说话也算定住：第一条真实用户消息到达时把当时的默认值写下来。
+  const fresh = fakeAgent('spoken-session', workspace)
+  const speaking = make('角色')
+  await speaking.attach(fresh)
+  await speaking.onUserMessage(fresh, { role: 'user', source: { kind: 'user' } })
+  const laterDefault = make('守则')
+  const reloaded = fakeAgent('spoken-session', workspace)
+  await laterDefault.attach(reloaded)
+  assert.equal(laterDefault.presetName(reloaded), '角色', '说过话的会话不回落到新默认值')
+
+  // 明确「不使用预设」也要写下来，否则它会一直跟着默认值飘。
+  await speaking.setPreset(fresh, '')
+  const cleared = make('角色')
+  const noPreset = fakeAgent('spoken-session', workspace)
+  await cleared.attach(noPreset)
+  assert.equal(cleared.presetName(noPreset), '', '显式选了「不使用」就一直是原生 identity')
+  assert.equal(cleared.presetText({ agent: noPreset }), '')
 
   // 默认值指向一个已经被删掉的名字：安静地当作没有，不要报错。
   const missing = make('不存在')
