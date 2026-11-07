@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { CONFIG_FILE_NAME, loadConfigFile } from '../lib/config.js'
 import { parseDocument } from '../lib/document.js'
 import { resolveLayout } from '../lib/paths.js'
+import { formatLogDate } from '../lib/log.js'
 import { PresetStore } from '../lib/preset.js'
 import { MemoryStore } from '../lib/store.js'
 import { MemoryRuntime } from '../lib/runtime.js'
@@ -370,6 +371,42 @@ await check('面板拖动标题：同级重排落盘，日志拒绝', async () =
   await assert.rejects(
     () => runtime.patchFile({ scope: 'Global', kind: 'log', fileName: '2026-01-02', order: [{ parent: ['2026-01-02'], titles: ['09:00 早'] }] }),
     /不能调顺序/,
+  )
+})
+
+await check('面板删除日志条目：二级能删，当天日期那一级不能删', async () => {
+  const { store, workspace } = await sandbox()
+  const entry = (desc) => ({ update_at: '2026-01-01T00:00:00.000Z', desc, keyword: [], children: new Map() })
+  await store.write(store.globalDir, 'Global', {
+    fileName: '2026-01-02',
+    desc: '',
+    scope: 'Global',
+    kind: 'log',
+    roots: new Map([
+      ['2026-01-02', {
+        update_at: '2026-01-01T00:00:00.000Z',
+        desc: '',
+        keyword: [],
+        children: new Map([['09:00 早', entry('吃了面')], ['12:35 中午', entry('开会')]]),
+      }],
+    ]),
+    source: '',
+  })
+  const runtime = runtimeFor(store, workspace)
+
+  const body = await runtime.patchFile({
+    scope: 'Global',
+    kind: 'log',
+    fileName: '2026-01-02',
+    removed: [['2026-01-02', '09:00 早']],
+  })
+  assert.deepEqual(body.tree[0].children.map((node) => node.title), ['12:35 中午'])
+  assert.doesNotMatch((await runtime.fileText({ scope: 'Global', kind: 'log', fileName: '2026-01-02' })).text, /吃了面/)
+
+  // 一级标题就是当天的日期，删了文档就和文件名对不上。
+  await assert.rejects(
+    () => runtime.patchFile({ scope: 'Global', kind: 'log', fileName: '2026-01-02', removed: [['2026-01-02']] }),
+    /一级标题就是当天日期/,
   )
 })
 
@@ -928,6 +965,51 @@ const filled = (fileName, roots) => ({
 
 const node = (desc, children = new Map()) => ({ update_at: '', desc, keyword: [], children })
 
+await check('自己写记忆之后不会被告知“别的会话”往注入过的日志里加了条目', async () => {
+  const { store, workspace } = await sandbox()
+  await store.write(store.globalDir, 'Global', {
+    fileName: '2026-01-02',
+    desc: '',
+    format: '',
+    scope: 'Global',
+    kind: 'log',
+    roots: new Map([
+      ['2026-01-02', node('', new Map([['09:00 早', node('吃了面')]]))],
+    ]),
+    source: '',
+  })
+  // 注入开着才会把日志天冻结进提示词；工作区那份当天空日志不占预算。
+  const runtime = runtimeFor(store, workspace, {
+    injectLog: true,
+    logInjectEntries: 0,
+    logInjectGlobalDays: 3,
+    logInjectGlobalDetailDays: 1,
+    logInjectWorkspaceDays: 0,
+    logInjectWorkspaceDetailDays: 0,
+  })
+  const writer = fakeAgent('self-write', workspace)
+  const other = fakeAgent('other-write', workspace)
+  await runtime.attach(writer)
+  await runtime.attach(other)
+
+  assert.match(runtime.sectionText({ agent: writer }), /吃了面/, '那一天确实进了提示词')
+  assert.equal(runtime.frozenLogKeys(writer).length, 1)
+
+  // 自己写一份记忆：基线必须和通知比对的那份同形，否则那次 advance 会把冻结的
+  // 日志天从基线里删掉，下一次比对就把它当成了别人新加的。
+  await store.write(store.globalDir, 'Global', filled('自己的笔记', new Map([['主题', node('刚写的')]])))
+  await runtime.afterWrite(writer, store.globalDir)
+  runtime.broadcast(store.globalDir)
+  await runtime.onUserMessage(writer, { role: 'user', source: { kind: 'user' } })
+  assert.deepEqual(writer.injected, [], '自己写的东西不该被当成别人的更新')
+
+  // 别人的会话照旧收到这条更新，日志那一侧没有假变化。
+  await runtime.onUserMessage(other, { role: 'user', source: { kind: 'user' } })
+  assert.equal(other.injected.length, 1)
+  assert.match(other.injected[0].content[0].text, /自己的笔记/)
+  assert.doesNotMatch(other.injected[0].content[0].text, /2026-01-02/)
+})
+
 await check('并发加载同一目录时后到的调用者不会看到空缓存', async () => {
   const store = new MemoryStore({ homeDir: await mkdtemp(join(tmpdir(), 'dsh-memory-race-')), warn: () => {} })
   await mkdir(join(store.globalDir, 'log'), { recursive: true })
@@ -1073,10 +1155,45 @@ await check('memory_manage 把 new_file_name 传空串就删掉整份文件', as
   await assert.rejects(() => runtime.read(agent, { scope: 'Global', fileName: '要删的' }), /找不到记忆文件/)
   assert.doesNotMatch(await runtime.read(agent, { scope: 'Global' }), /要删的/)
 
-  // 日志不能这样删：它由插件按日期管理。
+  // 日志的元数据改不了，报错要说清「能删掉的是那一整天」。
   await assert.rejects(
-    () => runtime.manage(agent, { scope: 'Global', fileName: '2026-10-27', newFileName: '' }),
+    () => runtime.manage(agent, { scope: 'Global', fileName: '2026-10-27' }),
     /日志文件的元数据由插件管理/,
+  )
+
+  store.dispose()
+  await rm(workspace, { recursive: true, force: true })
+  await rm(store.homeDir, { recursive: true, force: true }).catch(() => {})
+})
+
+await check('删掉一整天的日志：文件从磁盘上消失，再删就报没有那一天', async () => {
+  const { store, workspace } = await sandbox()
+  const runtime = runtimeFor(store, workspace)
+  const agent = fakeAgent('logday', workspace)
+  // 日志写在会话自己的工作区里；attach 已经补建了当天的空文件。
+  const directory = store.workspaceDir(workspace)
+  await runtime.attach(agent)
+  const today = formatLogDate()
+  assert.equal(store.logFile(directory, today).document.kind, 'log')
+
+  await runtime.read(agent, { scope: 'Workspace', fileName: today })
+  await runtime.edit(agent, { fileName: today, path: [today, '09:10 早上'], newString: '吃了面' })
+  assert.match(await runtime.read(agent, { scope: 'Workspace', fileName: today }), /吃了面/)
+
+  const result = await runtime.manage(agent, { scope: 'Workspace', fileName: today, newFileName: '' })
+  assert.equal(result.deleted, true)
+  assert.equal(result.kind, 'log')
+  assert.equal(result.fileName, today)
+  assert.equal(result.scope, 'Workspace')
+  // 磁盘和缓存里都不该再留着那一天，否则清单和注入还会看见它。
+  assert.deepEqual(await readdir(join(directory, 'log')), [])
+  assert.deepEqual(store.logDocuments(directory), [])
+  await assert.rejects(() => runtime.read(agent, { scope: 'Workspace', fileName: today }), /没有 .* 的日志文件/)
+
+  // 再删一次：说的是「没有那天的日志」，不是「找不到记忆文件」。
+  await assert.rejects(
+    () => runtime.manage(agent, { scope: 'Workspace', fileName: today, newFileName: '' }),
+    /没有 .* 的日志文件/,
   )
 
   store.dispose()

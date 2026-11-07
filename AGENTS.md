@@ -10,8 +10,8 @@ DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文
 
 包里带的是另一种东西：`defaults/memory/*.yaml`（六份起步的记忆文件）和 `defaults/BOOTSTRAP.md`（出生清单）。它们在第一次启动时写进数据目录，详见 §16。别把这两件事混起来——**预设不预置，记忆预置**。
 
-- 做：提示词注入（记忆 + 预设 + 出生清单）、读写工具、跨会话通知、按日日志、首次安装的默认内容、设置面板（含「预设」页签）。
-- 不做：自动召回、删除记忆目录、跨层级移动章节、删除日志。
+- 做：提示词注入（记忆 + 预设 + 出生清单）、读写工具、跨会话通知、按日日志、按轮数注入的定时提示、首次安装的默认内容、设置面板（含「预设」页签）。
+- 不做：自动召回、删除记忆目录、跨层级移动章节。
 - 运行时依赖 `yaml` 和 `@deepseek-ai/schemastery`（宿主同款的配置 schema 库；`link:` 安装时它必须也是本包的依赖，否则从仓库目录解析不到）。ESM，无构建步骤，`"type": "module"`。
 
 用户画像：聊天、扮演、轻量编程；记忆存量预期不大，塞得进提示词。
@@ -23,8 +23,8 @@ DeepSeek Harness 的跨会话长期记忆插件。记忆是磁盘上的 YAML 文
 ## 2. 跑起来
 
 ```bash
-# 七份离线测试，不需要宿主（这是主要的验证手段）
-node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/bootstrap.test.mjs test/notification-scheduler.test.mjs
+# 八份离线测试，不需要宿主（这是主要的验证手段）
+node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/bootstrap.test.mjs test/reminder.test.mjs test/notification-scheduler.test.mjs
 
 # 需要在真实宿主里跑：逐条验证三个工具的成功与错误路径
 node test/live.mjs
@@ -76,6 +76,7 @@ node test/dump.mjs
 | `lib/config.js` | 配置文件读写（就地改行、保留注释） | `CONFIG_FILE_NAME` `loadConfigFile` `saveConfigValue` |
 | `lib/settings-route.js` | 设置面板的 HTTP 端点 | `SETTINGS_ROUTE` `createSettingsHandler` |
 | `lib/subagent.js` | 子 agent 判定（会话头、委派深度、`agent.options`） | `isSubagentAgent` |
+| `lib/reminder.js` | 定时提示：轮数状态文件、用户消息计数、到期判定、消息形状与插入位置 | `REMINDER_DIR_NAME` `REMINDER_SOURCE_KIND` `reminderStatePath` `readReminderTurns` `writeReminderTurns` `countUserMessages` `reminderDue` `renderReminder` `reminderMessage` `withReminder` |
 | `ui/client.js` | 浏览器侧「记忆」标签页：装配、i18n、样式、状态与 effect；另含新会话那一行的预设下拉（`PresetSeat`） | 模块工厂，注册进 `conversation.view` 与 `conversation.hero.options` |
 | `ui/client.settings.js` | 设置表单渲染（chunk） | `renderSettings` |
 | `ui/client.browse.js` | 左栏列表渲染（chunk） | `renderBrowser` |
@@ -151,6 +152,7 @@ node test/dump.mjs
 - **`sections` 的键是完整标题路径**，所以改父标题会让整棵子树的键都变。`diffSections()` 先做一次改名识别：一对"消失"和"出现"的路径如果等长、只差一处、且内容指纹相同（或子树集合完全一致），合并成一条 `renamed`。这一识别只此一处。
 - `sections` 看不见"只改 `meta_data`"或"同级重排"，那时 `diffEntries()` 退回文件级 `{ path: [], kind: 'file' }`——只要整份文件 `hash` 变了就一定有话说。整份文件被删时 `describeChanges()` 反向遍历基线里多出来的键，报 `deleted`。
 - **`writeSnapshot` 兼容"只传 files"**（旧调用与测试用），内部包成 `{ files }`；`injected` / `tools` 只在有值时写入，避免推进基线时把冻结部分冲掉。
+- **推进基线的形状必须和比对时一致**：`notifyAgent()` 拿 `currentSnapshot(agent, frozenLogKeys(agent))` 比，所以 `afterWrite()` 推进基线时也必须带 `frozenLogKeys(agent)`。0.4.1 漏了这一个参数——会话注入过带内容的日志、自己又写了任何一份记忆之后，基线里日志天被挤掉，下一次比对就把那一整天当成"新增"，作者会收到一条"别的会话往你的日志里加了条目"的假通知。新会话在 `attach()` 里只传记忆文件是**安全**的：那一步之后 `sectionText()` 冻结时会用带日志键的快照把它覆盖掉，而中间没有任何 diff 检查。
 
 ## 7. 投递与通知
 
@@ -170,7 +172,8 @@ node test/dump.mjs
 
 - `meta_data` 只有 `file_name` 和按 `scope` 写死的 `desc`（`LOG_DESCS`）；多一个键就解析失败。
 - 摘要长度（`logSummaryMaxChars`）**只在新建条目、或改名换掉摘要时校验**。已存在条目的编辑只动正文和关键词，路径里的那份摘要没被改，就不该拦；改名只换时分更不该拦——早期把校验放在两个分支之外，导致"上限调低后老条目连关键词都改不了"。
-- 写：`heading_path` 必须写全 `# 2026-10-27 > ## 12:35 摘要`，少一层多一层都报错；条目按时间插入；只能写当天；不能删除。
+- 写：`heading_path` 必须写全 `# 2026-10-27 > ## 12:35 摘要`，少一层多一层都报错；条目按时间插入；只能写当天。
+- 删：条目能整条删（`new_string` 传空串，`heading_path` 指到那条），走 `removeLogEntry()`；**一级标题删不了**——它就是当天的日期。`normalizeLogPath()` 固定要求两级，所以日期那一级永远进不了删除分支。要删掉一整天就删那份文件（`memory_manage` 传空 `new_file_name`，或面板左栏的 `remove`）：当天那份被删掉等于**清空这一天**，`ensureTodayLog()` / `logTarget()` 会在下次 `attach()` 或下次写入时把它补回空文件。
 - 改名：二级条目可以改标题（`old_string` = `## 12:35 旧摘要`，`new_string` = `## 09:10 新摘要`），由 `renameLogEntry()` 处理，改名后 `sortLogEntries()` 重排；**一级标题永不改名**——它就是 `file_name`，改了文档就和文件名对不上。这个分支在 `assertPlainLog()` **之前**，所以"两边都写成标题行"是合法改名，只有剩下的以 `#` 开头的 `new_string` 才算往正文里塞标题。
 - 读：`file_name` 是日期（`2026-10-26..2026-10-27` 是范围），`heading_path` 用 `12:00..14:00` 收窄；范围分隔符是 `..`，路径分隔符是 ` > `，混用会明确报错，不猜。非法范围**显式抛错**，不会静默把当天条目全丢掉。
 - 同一时刻可以有多条条目（`19:20 去了` / `19:20 回来`），路径的键是完整标题不是时分；摘要不参与匹配。
@@ -209,12 +212,13 @@ node test/dump.mjs
 
 **返回值只报标题路径，不回显正文**：`[Global] 已更新 我的记忆 > # 沟通方式`。正文已经被写进文件，回显一份只会白占模型的上下文（还要为它做截断）；要确认内容就再读一次。路径由 `paragraphLabel(fileName, path)` 拼：`headingLabel()` 按层级补 `#`，日志（`isDateShaped(fileName)`）去掉与文件名重复的日期级，剩下那级仍按 `##` 写，所以 `headingLabel(path, depth)` 带了个 `depth` 参数来偏移层级。唯一的长度限制是 `middleEllipsis()`（60 字，中间省略），只作用于路径。
 
-`memory_manage` 的语义（`MemoryRuntime.manage`，`new_file_name` 一个参数三种意思）：
+`memory_manage` 的语义（`MemoryRuntime.manage`，`new_file_name` 一个参数几种意思）：
 
 - 没有 `file_name` → 新建，名字取自 `new_file_name`；日期形式的文件名拒绝（留给日志）。
 - 有 `file_name`、没有 `new_file_name` → 只改 `desc` / `format` / `inject_ignore`。
 - 有 `file_name` + 不同的 `new_file_name` → 改名：改 `document.fileName` 后**写新路径、再删旧文件**（顺序不能反，否则乐观锁读的原路径已经没了），`baseRelative` 指向旧路径让哈希锁落在旧文件上；旧文件删不掉就报错而不是留两份。
-- `new_file_name` 是**空字符串** → 删掉整份文件（`rm` + `store.forget`），日志拒绝。注意 `tools.js` 里这一项必须读原始 `args.new_file_name`，不能走 `stringArg`——它把空串当成没给，删除会退化成一次空保存。
+- `new_file_name` 是**空字符串** → 删掉整份文件（`rm` + `store.forget`）。注意 `tools.js` 里这一项必须读原始 `args.new_file_name`，不能走 `stringArg`——它把空串当成没给，删除会退化成一次空保存。
+- **`file_name` 是日期（`isLogDate`）→ 只有"删掉这一天"一种可能**：`requireFile()` 会跳过日志文档，所以日期必须在查文件之前就拦下。给了名字（`new_file_name` 非空）时抛 `` 日志文件的元数据由插件管理，不能用 memory_manage 修改；要删掉 <日期> 这一天的日志，把 new_file_name 传空字符串 ``；传空串则走 `deleteLogDay()`——用 `logFilesOf()` 定位（沿用 Workspace 优先），再取 `store.logFile()` 的 `relative` 做 `rm` + `forget` + `afterWrite()`，返回带 `kind: 'log'`。没有那天报「没有 <日期> 的日志文件」，不是「找不到记忆文件」。**当天那份被删掉等于清空这一天**，见 §8。
 - 改名后 `inject_ignore` 的校验标签用新名字；同目录重名直接拒绝。
 
 ## 11. 面板与 chunk 契约
@@ -232,6 +236,7 @@ node test/dump.mjs
 - 保存按钮用 `inFlight` ref 挡重复点击：回车和按钮能在同一次渲染里各触发一次，`busy` 那时还是 `false`。
 - 切作用域 / 切货架时清空选中项**连同草稿**（待删标题、待建卡片、待加关键词），否则在 A 上标了要删的标题、切到 B 一保存就会把 A 的路径发出去。
 - **标题拖动只重排同级兄弟，只对 memory 文件开放**（日志的标题由插件按日期组织）。拖动状态全在草稿里：`reorders` 是 `{ 父路径的 JSON.stringify: [标题顺序] }`，`headingDrag()` 只改它、不碰 `nodes`，保存时转成 `order: [{ parent, titles }]` 一起发出去；`fileDirty('content')` 要把 `Object.keys(reorders).length > 0` 算进去，否则拖完还是「没改」。`ui/client.file.js` 的 `orderNodes()` 是画的时候唯一的应用点——它把 `reorders` 里那一层排前面、漏掉的按原顺序补后面，所以面板看不见的标题（正在输入的名字、别的标签页新加的兄弟）不会凭空消失；后端 `patchFile` 的 `request.order` 必须排在改名、删除、新建**之后**才收尾，否则会被 `set` / `delete` 打乱。
+- **日志的条目卡有 `×`，日期那一级没有**：`cardTitleRow` 只在给了 `onRemove` 时才画那个按钮，日志的日期级（`fileKind === 'log' && path.length === 1`，同一个 `dateHeading` 标志还管着「不给空正文框」）传的是 `null`。删不了的东西不给删除按钮——点了才报错，等于骗用户。整份删走左栏那一行的 `remove`（`deleteFile()` 本来就支持 log day）。后端 `patchFile` 仍然拦一道：`kind !== 'memory'` 的 removals 里只要有一条短于 `LOG_MAX_DEPTH`，就报「日志的一级标题就是当天日期，删不了；能删的是二级条目」——面板不画按钮，不代表手写的 POST 可以。
 
 ## 12. 设置路由
 
@@ -273,10 +278,11 @@ POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove
 - **加工具**：`defineTool()` 已含参数校验、agent 检查、错误包装、`presentCall`，新工具只写 `name/description/properties/run/present`。
 - **改日志形状**：`log.js` 的 `LOG_MAX_DEPTH` / `parseLogEntryTitle` / `assertLogTitle` 是全部形状规则；`isLogDate()` 是唯一日期判定点，`parseLogDateQuery()` 是唯一日期查询解析点。
 
-规划中但没做的两件事（用户已在 [README](./README.md#近期目标) 里定了优先级，别擅自提前实现）：
+**定时提示已经做了**（§18）——它按当初设想的路线落地：追加到对话、不改系统提示词，所以前缀缓存不动。
+
+规划中还没做的一件事（用户已在 [README](./README.md#近期目标) 里定了优先级，别擅自提前实现）：
 
 1. **关键词召回** —— 它和不变量 2（前缀按会话冻结）**天然冲突**：召回结果随话题变，注入文本一改缓存全废。要做得在会话开始 / 快照重建那一刻召一次、结果跟快照一起冻结，不是每轮召回。落地前先把"省下的 token vs 打掉缓存的钱"算清楚。
-2. **定时/定频注入** —— 倾向追加到对话（像通知那样不唤醒），不要改系统提示词，否则又是在动前缀。
 
 ## 15. 约定与坑
 
@@ -286,7 +292,7 @@ POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove
 - **`update_at` 落盘走 `lib/text.js` 的 `localTimestamp()`**：本地墙上时间带偏移（`2026-10-27T03:18:36+08:00`）。别用 `toISOString()`——那是 UTC，面板和提示词里都会和用户的钟差上几个小时；也别写成不带偏移的裸时间，换个时区就没法和别人的比。生成点只有两个：`runtime.js` 的 `writeEdit()` 和 `panel-service.js` 的 `patchFile()`。内部状态（快照 `updatedAt`、`touched`）仍是 ISO `Z`，那不给用户看。
 - 仓库有 git（`origin` = github.com/2424830124/dsh-memory），历史都在提交里；`.backup/` 是加 git 之前留的临时备份，已经清掉。
 - 中文文案统一用中文全角标点；报错要告诉模型"哪一份、哪个标题、为什么"，不要只说"失败"。
-- 新增行为优先补测试（七份离线 suite 是主要自动验证）；`test/live.mjs` 只在真实宿主里跑。
+- 新增行为优先补测试（八份离线 suite 是主要自动验证）；`test/live.mjs` 只在真实宿主里跑。
 - `locale/zh.json` / `locale/en.json` 是插件的元信息（面板外），面板内的文案在 `ui/client.js` 的 `DICTIONARIES`。
 
 ## 16. 首装默认内容与出生清单
@@ -307,3 +313,18 @@ POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove
 - `docs/` —— 落盘与返回形状的参照，不参与运行；形状变了要顺手改，测试不替它们兜底：
   [记忆文件格式](docs/记忆文件格式.md)、[日志文件格式](docs/日志文件格式.md)、
   [通用返回格式](docs/通用返回格式.md)、[日志返回格式](docs/日志返回格式.md)。
+
+## 18. 定时提示（按轮数注入）
+
+设置面板里的两项：`reminderEvery`（每隔几轮，0 = 关）和 `reminderText`（要注入的话）。到点时插件在**最后一条用户消息后面**补一条 `role: 'user'` 的消息，和用户那条一起进同一次请求——不改用户原话，也不动系统提示词（写进提示词等于每 N 轮打掉一次前缀缓存，见不变量 2）。
+
+- **唯一挂点**：`index.js` 的 `agent/pre-step` 瀑布（`ctx.on('agent/pre-step', async (payload, next) => { const decision = await next(); … })`）。这是宿主要提交的消息已经定下、又还什么都没提交的那一刻，所以能在用户消息后追加一条。**别改用 `agent/inject` 或 `system-prompt/*`**：前者是塞收件箱（不跟着这一轮走），后者动前缀。
+- **不改 decision 的形状**：要么原样 `return decision`（同一个对象），要么 `return { ...decision, messages }`，`messages` 必须是新数组——`withReminder()` 返回副本，不动入参。
+- 消息形状（`reminderMessage()`，跟 dsh-im 的 `contextMessage()` 同款）：`{ id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'plugin:dsh-memory', form: 'notice', summary: '第 N 轮提示' } }`。`source.kind` 带 `plugin:` 前缀，**不要**另写一个 `source.plugin` 字段。`summary` 是这条插件消息的摘要，措辞别乱改。
+- 正文带 `<memory_reminder>` 标签，里面写明「第 N 轮。这是用户提前设置好的提示，不是新的请求。」——模型得知道这不是用户刚说的话。模板只有 `renderReminder()` 一处。
+- **轮数按用户自己发的消息数算**（只认 `source.kind === 'user'`）：插件消息、定时任务消息、`memory` 通知都不算轮，模型的多步工具调用更不算。子 agent 直接跳过（`isSubagentAgent()`），不计数也不注入。
+- **计数按会话存在 `state/reminder/<sessionId>.json`**（`{version: 1, turns}`），重启接着数，不是从头来。内存里那张 `this.reminderTurns` 表是这一轮的权威：磁盘读失败不能让同一个会话每轮都触发一次；写失败只 warning（`writeReminderTurns(...).catch(warn)`）。
+- 到期判定是 `reminderDue(previous, turns, every)`：`floor(turns/every) > floor(previous/every)`——一步里跨过第 3 轮也发一次，同一轮里不重复发。
+- 整段包在 try/catch 里（不变量 8）：出错就 `return decision`，注入失败不能毁掉这一轮。
+- 关掉（`every <= 0`）、文本为空（trim 后）、没有 agent、不是要提交消息的步骤、数不到用户消息——这些情况一律**原样返回同一个 decision 对象**，不要凭空造一个新对象。
+

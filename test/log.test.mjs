@@ -258,7 +258,7 @@ await check('条目按时间排序，不按写入顺序', () => {
   assert.deepEqual(entriesOf(log), ['09:10 早上', '12:35 中午', '14:05 下午'])
 })
 
-await check('日志条目可以改名，一级标题不能改，条目不能删，正文不能出现标题行', () => {
+await check('日志条目可以改名、可以整条删，一级标题不能改也不能删，正文不能出现标题行', () => {
   const log = logOf()
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '还是那家店' }, 'T')
 
@@ -273,7 +273,11 @@ await check('日志条目可以改名，一级标题不能改，条目不能删�
     /一级标题就是当天日期/,
   )
 
-  assert.throws(() => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], removeOnly: true }, 'T'), /日志条目不能删除/)
+  // 一级标题（当天日期）寻不到：日志的形状固定两级，删它和改它一样被挡在外面。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27'], removeOnly: true }, 'T'),
+    /日志要写成两级/,
+  )
 
   // 第一行是标题行就按改名解释，缺 old_string 时提示两条路都怎么写。
   assert.throws(
@@ -294,6 +298,17 @@ await check('日志条目可以改名，一级标题不能改，条目不能删�
   // 句中的 # 不是标题行，照旧允许。
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: '还是那家店', newString: '还是那家 # 面馆' }, 'T')
   assert.equal(logEntries(log)[0][1].desc, '还是那家 # 面馆')
+
+  // 整条删掉：正文和关键词一起走，删完这天就空着，日期那级还在。
+  applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], addKeywords: ['午饭'] }, 'T')
+  const gone = applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], removeOnly: true }, 'T')
+  assert.equal(gone.deleted, true)
+  assert.deepEqual(entriesOf(log), [])
+  assert.ok(log.roots.has('2026-10-27'), '日期那级留着，文件还是这一天的日志')
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], removeOnly: true }, 'T'),
+    /找不到标题/,
+  )
 })
 
 await check('改二级条目的时分和摘要，正文和关键词跟着走，位置重排', () => {

@@ -241,6 +241,21 @@ export function apply(ctx, config) {
     }
   }), 'memory.prompt()')
 
+  // 每隔 N 轮把用户设置好的提示跟在用户消息后面一起发出去。`agent/pre-step` 是
+  // 唯一合适的落点：这一步要提交的消息已经确定，而什么都还没提交。提示自成一条
+  // 插件消息（`source.kind` 是 `plugin:dsh-memory`），用户那句话一个字都不动；
+  // 系统提示词也不动——把提示写进提示词等于每 N 轮打掉一次供应商的前缀缓存。
+  // 子 agent 不算轮：那是模型自言自语，不是用户的一次发言。
+  ctx.effect(() => ctx.on('agent/pre-step', async (payload, next) => {
+    const decision = await next()
+    try {
+      return await runtime.reminderStep(payload?.agent, decision)
+    } catch (error) {
+      warn(`memory: 注入定时提示失败 ${error?.message ?? error}`)
+      return decision
+    }
+  }), 'memory.preStep()')
+
   ctx.effect(() => ctx.on('agent/created', async ({ agent, signal }) => {
     try {
       const subagent = isSubagentAgent(agent)

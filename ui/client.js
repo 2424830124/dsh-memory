@@ -134,6 +134,11 @@ window.__ModuleLoader__.load({
         'hint.logInjectWorkspaceDays': '工作区日志带最近几天',
         'field.logInjectWorkspaceDetailDays': '工作区带正文天数',
         'hint.logInjectWorkspaceDetailDays': '这几天里最新的几天带正文，其余只留标题',
+        'group.reminder': '提示',
+        'field.reminderEvery': '每隔几轮注入提示',
+        'hint.reminderEvery': '每收到这么多条你的消息，就在那条消息后面附一次下面那段提示；0 表示关掉。轮数按会话记，关掉再打开接着数',
+        'field.reminderText': '要注入的提示',
+        'hint.reminderText': '到点时会作为一条独立的消息、跟在你的消息后面同一次发出去；你说的那句话不会被改写，系统提示词也不动',
       },
       en: {
         tab: 'Memory',
@@ -251,6 +256,11 @@ window.__ModuleLoader__.load({
         'hint.logInjectWorkspaceDays': 'Days of workspace log to carry',
         'field.logInjectWorkspaceDetailDays': 'Workspace detail days',
         'hint.logInjectWorkspaceDetailDays': 'Newest days that keep their body; the rest keep only the heading',
+        'group.reminder': 'Reminder',
+        'field.reminderEvery': 'Remind every N turns',
+        'hint.reminderEvery': 'After every N messages of yours, the reminder below is sent along with that message; 0 turns it off. The count is kept per session, so reopening a session carries on',
+        'field.reminderText': 'Reminder text',
+        'hint.reminderText': 'Sent as a message of its own right after yours, in the same request — what you typed is never rewritten, and the system prompt is left alone',
       },
     }
 
@@ -504,6 +514,22 @@ window.__ModuleLoader__.load({
       fontSize: 12,
       lineHeight: '18px',
       color: 'var(--dsw-alias-label-tertiary)',
+    }
+
+    /** The multi-line box a long string field is edited in. */
+    const boxStyle = {
+      boxSizing: 'border-box',
+      width: 'min(340px, 100%)',
+      minHeight: 76,
+      padding: '7px 9px',
+      borderRadius: 8,
+      border: '1px solid var(--dsw-alias-border-l2)',
+      background: 'var(--dsw-alias-bg-layer-1)',
+      color: 'var(--dsw-alias-label-primary)',
+      font: 'inherit',
+      fontSize: 13,
+      lineHeight: '19px',
+      resize: 'vertical',
     }
 
     /** Muted text: hints and the loading line. */
@@ -1541,6 +1567,7 @@ window.__ModuleLoader__.load({
         ? [h('p', { key: 'chunk', style: textStyle }, t('loading'))]
         : chunks.settings.renderSettings({
           UI,
+          boxStyle,
           busy,
           draft,
           fields,

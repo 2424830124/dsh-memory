@@ -1,7 +1,7 @@
 {
   "name": "@huai_xin/dsh-memory",
-  "version": "0.4.1",
-  "description": "Cross-session long-term memory and per-session presets for DeepSeek Harness: YAML memory notebooks injected into the prompt, read and edited by the model, kept in sync across sessions, plus Markdown presets that replace the harness identity.",
+  "version": "0.5.0",
+  "description": "Cross-session long-term memory, per-session presets and periodic reminders for DeepSeek-Harness: YAML memory notebooks injected into the prompt, read and edited by the model, kept in sync across sessions, plus Markdown presets that replace the harness identity and a reminder appended alongside the user's own message every N turns.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -47,7 +47,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/bootstrap.test.mjs test/notification-scheduler.test.mjs",
+    "test": "node --test test/core.test.mjs test/store.test.mjs test/schema.test.mjs test/log.test.mjs test/settings.test.mjs test/bootstrap.test.mjs test/reminder.test.mjs test/notification-scheduler.test.mjs",
     "test:live": "node test/live.mjs",
     "dump": "node test/dump.mjs"
   },

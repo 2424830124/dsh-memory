@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
     const render = (props) => {
       const {
         UI,
+        boxStyle,
         busy,
         draft,
         fields,
@@ -41,6 +42,17 @@ window.__ModuleLoader__.load({
             disabled: busyNow,
             label: t(`field.${field.key}`),
             onChange: (next) => update(field, next),
+          })
+        }
+        // 长的字符串用多行框：提示这类东西常写成几行，单行输入框里看不见全貌。
+        if (field.multiline === true) {
+          return h('textarea', {
+            value: draft[field.key] ?? '',
+            disabled: busyNow,
+            'aria-label': t(`field.${field.key}`),
+            onChange: (event) => update(field, event.target.value),
+            onKeyDown,
+            style: boxStyle,
           })
         }
         return h(UI.Input, {

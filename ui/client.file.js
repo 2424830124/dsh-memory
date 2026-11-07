@@ -172,13 +172,16 @@ window.__ModuleLoader__.load({
           ? null
           : h('span', { style: anchorSlotStyle },
             addButton(false, parts.onAddChild, t('node.addChild'))),
-        h('button', {
-          type: 'button',
-          className: 'dsm-hover',
-          'aria-label': t('remove'),
-          onClick: parts.onRemove,
-          style: deleteButtonStyle,
-        }, '×'))
+        // 删不了的东西不给删除按钮：日志的一级标题是日期，整份删要走左栏。
+        parts.onRemove === undefined || parts.onRemove === null
+          ? null
+          : h('button', {
+            type: 'button',
+            className: 'dsm-hover',
+            'aria-label': t('remove'),
+            onClick: parts.onRemove,
+            style: deleteButtonStyle,
+          }, '×'))
 
       /**
        * 关键词那一行：已有的词做成可删的标签，右边留给「+」和它的输入框。
@@ -617,7 +620,9 @@ window.__ModuleLoader__.load({
           onTitle: (value) => patchNode(key, { title: value }),
           onAddChild: file?.kind === 'memory' && path.length < MAX_DEPTH ? () => spawnAdd(path) : null,
           // 删掉这一支连同下面的子标题，同样是草稿，点「保存」才落盘。
-          onRemove: () => setRemoved((previous) => [...previous, path]),
+          // 日期那一级不删：它就是这个文件的名字，整份要删去左栏（那里给的是
+          // 「删掉这一天的日志」）。
+          onRemove: dateHeading ? null : () => setRemoved((previous) => [...previous, path]),
         })
         const keywords = keywordRow({
           keywords: draftNow.keyword,

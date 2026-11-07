@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 
-import { saveConfigValue } from '../lib/config.js'
+import { loadConfigFile, saveConfigValue } from '../lib/config.js'
 import { DocumentError } from '../lib/errors.js'
 import { SETTINGS_ROUTE, createSettingsHandler } from '../lib/settings-route.js'
 
@@ -177,6 +177,22 @@ try {
     const source = await readFile(file, 'utf8')
     assert.match(source, /^injectLog: true$/m)
     assert.match(source, /^fileOrder: \[我的记忆, 项目笔记\]$/m)
+  })
+
+  await check('POST 定时提示：多行文本写成一行转义，读回来还是多行', async () => {
+    const runtime = runtimeStub(180)
+    const handler = createSettingsHandler({ file, runtime })
+    const text = '记得写日志\n别忘记更新记忆'
+    const { status } = await call(handler, 'POST', JSON.stringify({ reminderEvery: 3, reminderText: text }))
+    assert.equal(status, 200)
+    assert.equal(runtime.config.reminderEvery, 3)
+    assert.equal(runtime.config.reminderText, text)
+
+    const source = await readFile(file, 'utf8')
+    assert.match(source, /^reminderEvery: 3$/m)
+    assert.match(source, /^reminderText: "记得写日志\\n别忘记更新记忆"$/m, '换行转义成一行，不铺成多行块')
+    const loaded = loadConfigFile(file, (message) => console.log(`       warn: ${message}`))
+    assert.equal(loaded.reminderText, text, 'YAML 读回来还是两行')
   })
 
   await check('POST 超范围：400，文件不动', async () => {
