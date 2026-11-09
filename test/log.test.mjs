@@ -171,11 +171,11 @@ await check('日志的 desc 由 scope 写死，多一个别的字段就报错', 
   const log = logOf()
   applyEdit(log, { path: ['2026-10-27', '09:00 起床'], newString: '赖了十分钟' }, '2026-10-27T01:00:00.000Z')
   const source = serializeDocument(log)
-  assert.match(source, /^meta_data:\n {2}file_name: "?2026-10-27"?\n {2}desc: 用来记录和“他”之间的互动\n/)
+  assert.match(source, /^meta_data:\n {2}file_name: "?2026-10-27"?\n {2}desc: 用来记录和“他”之间的互动，不记项目操作\n/)
 
   const reloaded = parseDocument(source, { kind: 'log', fileName: '2026-10-27' })
   assert.equal(reloaded.kind, 'log')
-  assert.equal(reloaded.desc, '用来记录和“他”之间的互动')
+  assert.equal(reloaded.desc, '用来记录和“他”之间的互动，不记项目操作')
   assert.deepEqual(entriesOf(reloaded), ['09:00 起床'])
   assert.equal(logEntries(reloaded)[0][1].desc, '赖了十分钟')
 
@@ -463,6 +463,8 @@ await check('工具描述告诉模型怎么写日志', () => {
   assert.match(edit, /200/)
   assert.match(edit, /一级是当天日期/)
   assert.match(edit, /改二级条目的时分或摘要用改名/)
+  assert.match(edit, /全局日志只记和他之间的互动/, '工具描述里写明两份日志的分工')
+  assert.match(edit, /写工作区日志/)
   assert.doesNotMatch(edit, /例如/, '描述里不放具体例子，容易误导')
   assert.match(logReadRules(), /yyyy-mm-dd/)
 })
@@ -557,7 +559,7 @@ await check('两天一起读：一份头部，日期之间用 --- 隔开', async
 
   assert.equal(text, [
     '---',
-    'desc: 用来记录和“他”之间的互动',
+    'desc: 用来记录和“他”之间的互动，不记项目操作',
     'scope: Global',
     '---',
     '',
