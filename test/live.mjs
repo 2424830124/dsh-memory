@@ -480,7 +480,18 @@ async function runErrorCases() {
       ['heading_path 用数组形式（也收）', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: ['# 工具', '## 常用'], old_string: '优先用 pwsh，不用 bash。', new_string: '优先用 pwsh。' }],
       ['标题用保留字', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 关于用户 > ## desc', new_string: 'x' }],
       ['标题超过 3 级', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# a > ## b > ### c > #### d', new_string: 'x' }],
-      ['新建时上级不存在', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 项目 > ## dsh-memory > ### 测试', new_string: 'x' }],
+      ['上级不存在时一起建出来（一次建三级）', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 项目 > ## dsh-memory > ### 测试', new_string: 'x' }],
+      ['批量：两条一起建，第二条挂在第一条下面', 'memory_edit', { scope: 'Global', file_name: '我的记忆', edits: [
+        { heading_path: '# 批量 > ## 第一条', new_string: '甲的正文' },
+        { heading_path: '# 批量 > ## 第一条 > ### 子标题', new_string: '乙的正文' },
+      ] }],
+      ['批量：第二条失败，整批不写', 'memory_edit', { scope: 'Global', file_name: '我的记忆', edits: [
+        { heading_path: '# 批量 > ## 不该写进去的一条', new_string: '这一条本身没问题' },
+        { heading_path: '# 工具 > ## 常用', old_string: '这句话原文里没有', new_string: '换掉' },
+      ] }],
+      ['批量：和单条参数混着给', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 混着给', new_string: 'x', edits: [
+        { heading_path: '# 批量 > ## 另一条', new_string: 'y' },
+      ] }],
       ['新建标题却在正文里写了标题行', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 关于用户 > ## 宠物', new_string: '## 宠物\n养了一只猫。' }],
       ['正文里混进 #', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 工具 > ## 常用', new_string: '补充一句\n# 这是伪标题' }],
       ['长标题改名（结果中间省略）', 'memory_edit', { scope: 'Global', file_name: '我的记忆', heading_path: '# 一个特别长的标题名字用来触发中间截断 > ## 另一个同样很长的标题名字用来触发截断 > ### 第三层也很长的标题名字', old_string: '### 第三层也很长的标题名字', new_string: '### 第三层换成一个新的同样很长的名字' }],

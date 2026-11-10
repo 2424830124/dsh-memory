@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 
 import { parseDocument, serializeDocument } from '../lib/document.js'
-import { applyEdit, parseHeadingLine } from '../lib/edit.js'
+import { applyEdit, applyEdits, parseHeadingLine } from '../lib/edit.js'
 import { DocumentError } from '../lib/errors.js'
 import { createDocument } from '../lib/model.js'
 import { normalizeHeadingPath } from '../lib/path.js'
@@ -235,6 +235,97 @@ check('新建二级标题由 heading_path 决定层级', () => {
   applyEdit(doc, { path: ['我想要记住的', 'claude'], newString: '用的是 v4.1' }, 'now')
   assert.equal(bodyAt(doc, ['我想要记住的', 'claude']), '用的是 v4.1')
   assert.equal(findNode(doc, ['我想要记住的', 'claude']).children.size, 0)
+})
+check('新建三级标题时把缺的上级一起建出来', () => {
+  const doc = parseDocument(SAMPLE)
+  const outcome = applyEdit(doc, {
+    path: ['项目', 'dsh-memory', '测试'],
+    newString: '交叉编译要在 WSL 里做',
+  }, '2026-10-27T00:00:00+08:00')
+  assert.equal(outcome.created, true)
+  assert.equal(bodyAt(doc, ['项目', 'dsh-memory', '测试']), '交叉编译要在 WSL 里做')
+  // 上级是这次编辑建的：正文留空，时间戳跟被编辑的那一级一致。
+  assert.equal(bodyAt(doc, ['项目']), '')
+  assert.equal(bodyAt(doc, ['项目', 'dsh-memory']), '')
+  assert.equal(findNode(doc, ['项目']).update_at, '2026-10-27T00:00:00+08:00')
+  assert.deepEqual(outcome.filled, ['# 项目', '## dsh-memory'])
+  // 已经在那儿的那一截不动。
+  assert.equal(bodyAt(doc, ['我们经历过的一些事', '我们之间的互动']), '记录了我们之间的互动')
+})
+check('新建一级标题时没有上级要补', () => {
+  const doc = parseDocument(SAMPLE)
+  const outcome = applyEdit(doc, { path: ['我想要记住的'], newString: '用户的生日是 3 月 2 日。' }, 'now')
+  assert.deepEqual(outcome.filled, [])
+})
+check('补上级碰到已有的同级标题时接着用它，不另起一个', () => {
+  const doc = parseDocument(SAMPLE)
+  const outcome = applyEdit(doc, { path: ['我们经历过的一些事', '新的一节'], newString: '正文' }, 'now')
+  // 一级已存在：不该建出第二个同名的一级，也不该动原来的正文。
+  assert.equal(bodyAt(doc, ['我们经历过的一些事']), '一级正文')
+  assert.equal(bodyAt(doc, ['我们经历过的一些事', '新的一节']), '正文')
+  assert.equal(doc.roots.size, 1)
+  assert.deepEqual([...doc.roots.keys()], ['我们经历过的一些事'])
+  // 上级都还在：没有任何一级是这次补出来的。
+  assert.deepEqual(outcome.filled, [])
+})
+check('删标题时上级不存在照旧报错，不会凭空造出来', () => {
+  const doc = parseDocument(SAMPLE)
+  assert.throws(
+    () => applyEdit(doc, { path: ['没有这一级', '子标题'], removeOnly: true }, 'now'),
+    /找不到标题/,
+  )
+  assert.equal(findNode(doc, ['没有这一级']), undefined)
+})
+check('改正文时上级不存在照旧报错，不会凭空造出来', () => {
+  const doc = parseDocument(SAMPLE)
+  assert.throws(
+    () => applyEdit(doc, { path: ['没有这一级', '子标题'], oldString: '原文', newString: '新的' }, 'now'),
+    /找不到标题/,
+  )
+  assert.equal(findNode(doc, ['没有这一级']), undefined)
+})
+check('批量编辑按数组顺序应用：后一条能看到前一条建的标题', () => {
+  const doc = parseDocument(SAMPLE)
+  const outcomes = applyEdits(doc, [
+    { path: ['项目', 'dsh-memory'], newString: '编译与测试' },
+    { path: ['项目', 'dsh-memory', '测试'], newString: '八份离线 suite' },
+  ], '2026-10-27T00:00:00+08:00')
+  assert.equal(outcomes.length, 2)
+  assert.equal(outcomes[0].created, true)
+  assert.equal(bodyAt(doc, ['项目', 'dsh-memory', '测试']), '八份离线 suite')
+  // 第二条没有补任何上级：第一条已经把两级建好了。
+  assert.deepEqual(outcomes[1].filled, [])
+})
+check('批量里一条改正文、一条挂关键词，各落各的', () => {
+  const doc = parseDocument(SAMPLE)
+  applyEdits(doc, [
+    { path: ['我们经历过的一些事'], oldString: '一级正文', newString: '改过的正文' },
+    { path: ['我们经历过的一些事', '我们之间的互动'], addKeywords: ['日常'] },
+  ], 'now')
+  assert.equal(bodyAt(doc, ['我们经历过的一些事']), '改过的正文')
+  assert.deepEqual(findNode(doc, ['我们经历过的一些事', '我们之间的互动']).keyword, ['日常'])
+})
+check('批量里第几条出错就报第几条，并说明整批没写', () => {
+  const doc = parseDocument(SAMPLE)
+  assert.throws(
+    () => applyEdits(doc, [
+      { path: ['新的'], newString: '好的' },
+      { path: ['我们经历过的一些事'], oldString: '这句话原文里没有', newString: '换掉' },
+    ], 'now'),
+    /edits 第 2 条没有应用，这一批都没有写入：old_string 与目标标题的原文不一致/,
+  )
+})
+check('批量只有一条时错误照原样报，不加「第 1 条」', () => {
+  const doc = parseDocument(SAMPLE)
+  assert.throws(
+    () => applyEdits(doc, [{ path: [], newString: 'x' }], 'now'),
+    (error) => error.message === 'heading_path 不能为空',
+  )
+})
+check('批量必须是数组且非空', () => {
+  const doc = parseDocument(SAMPLE)
+  assert.throws(() => applyEdits(doc, [], 'now'), /edits 必须是非空数组/)
+  assert.throws(() => applyEdits(doc, undefined, 'now'), /edits 必须是非空数组/)
 })
 check('重命名标题并保留子树', () => {
   const doc = parseDocument(SAMPLE)

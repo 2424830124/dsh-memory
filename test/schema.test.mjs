@@ -212,6 +212,12 @@ try {
   assert.ok(text.includes('[Workspace] 工作日志:'), 'format 块缺少 Workspace 文件')
   assert.ok(text.includes('（这个文件没有声明 format）'), '空 format 未标注')
   assert.ok(text.indexOf('[Global] 我的记忆:') > text.indexOf('修改记忆文件的正文'), 'format 块应排在用途说明之后')
+  // The batch form is only reachable if the description says it exists: the
+  // model reads this text before it ever looks at the parameter list, and a
+  // sentence lost in an edit would quietly turn `edits` into a hidden feature.
+  assert.ok(text.includes('用 edits'), '用途说明没提 edits 批量')
+  assert.ok(text.includes('一批只改 scope 和 file_name 指的那一份文件'), '用途说明没说一批只能改一份文件')
+  assert.ok(text.includes('缺的上级会一起建出来'), '用途说明没提自动补齐上级')
   console.log('  ok   memory_edit 描述末尾拼上了每个文件的 format')
 } catch (error) {
   failures.push({ name: 'memory_edit.formatDoc', error })
@@ -250,6 +256,41 @@ try {
 } catch (error) {
   failures.push({ name: 'memory_edit.ellipsis', error })
   console.log(`  FAIL memory_edit 长结果未按预期截断: ${error.message}`)
+}
+
+// The batch form answers one line per request, in the order they were applied,
+// and refuses to mix itself with the single form: the two spellings differ only
+// in nesting, so a call that gives both would silently drop one of them.
+try {
+  const stub = {
+    async edit(agent, request) {
+      assert.deepEqual(request.edits.map((edit) => edit.path), [['工具', '常用'], ['新的一节']])
+      return { outcomes: [{ created: true, path: ['工具', '常用'] }, { path: ['新的一节'] }], scope: 'Workspace' }
+    },
+  }
+  const summary = (await editTool(stub).execute({
+    scope: 'Global',
+    file_name: '我的记忆',
+    edits: [
+      { heading_path: '# 工具 > ## 常用', new_string: '优先用 pwsh。' },
+      { heading_path: '# 新的一节', new_string: '还没想好' },
+    ],
+  }, { agent: {} })).summary
+  assert.equal(summary, '[Workspace] 已新建 我的记忆 > # 工具 > ## 常用\n[Workspace] 已更新 我的记忆 > # 新的一节', `批量的摘要每条一行：${JSON.stringify(summary)}`)
+
+  assert.ok(
+    (await editTool(runtime).parameters).properties.edits.required === undefined,
+    'edits 自己不该是必填',
+  )
+  await assert.rejects(
+    () => editTool(stub).execute({ scope: 'Global', file_name: '我的记忆', heading_path: '# 工具', edits: [{ heading_path: '# 工具' }] }, { agent: {} }),
+    /edits 与单条参数不能同时给/,
+    'edits 和单条字段同时给应该被拒绝',
+  )
+  console.log('  ok   memory_edit 的 edits 每条一行摘要，且与单条参数互斥')
+} catch (error) {
+  failures.push({ name: 'memory_edit.edits', error })
+  console.log(`  FAIL memory_edit 的 edits 结果形状不对: ${error.message}`)
 }
 
 if (failures.length > 0) {

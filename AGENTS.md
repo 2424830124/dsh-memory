@@ -62,7 +62,7 @@ node test/dump.mjs
 | `lib/snapshot.js` | 会话快照（三份）与标题级比对 | `headingHashes` `snapshotEntry` `diffSections` `diffEntries` `readSnapshot` `writeSnapshot` `copySnapshot` `removeSnapshot` `isStale` `pruneSnapshots` |
 | `lib/notice.js` | 比对结果 → 通知文案（空列表返回 `undefined`） | `NOTICE_SOURCE_KIND` `renderNotice` `renderBrokenNotice` |
 | `lib/render.js` | 文档 → 文本（注入、读取、日志、文件清单、format 段） | `renderInjection` `renderRead` `renderLog` `renderLogRange` `renderFileList` `renderFormats` |
-| `lib/edit.js` | 一次编辑请求的全部语义 | `applyEdit` `parseHeadingLine` |
+| `lib/edit.js` | 一次编辑请求的全部语义 | `applyEdit` `applyEdits` `parseHeadingLine` |
 | `lib/log.js` | 日志形状、日期与时间查询、固定规则文案 | `LOG_DIR_NAME` `LOG_MAX_DEPTH` `DEFAULT_SUMMARY_MAX_CHARS` `LOG_DESCS` `logRules` `logReadRules` 等 |
 | `lib/document.js` | YAML ↔ 文档对象 | `parseDocument` `serializeDocument` |
 | `lib/model.js` | 常量、字段校验、节点与文档构造 | `MAX_DEPTH` `RESERVED_KEYS` `INJECT_IGNORE_OPTIONS` `INJECT_IGNORE_LEVELS` `SCOPES` `createNode` `createDocument` `cloneDocument` `normalizeScope` `normalizeKind` 等 |
@@ -203,7 +203,8 @@ node test/dump.mjs
 
 `memory_edit` 的语义（`applyEdit`）：
 
-- `heading_path` 指向不存在的标题 → 新建（父级必须已存在）。
+- `heading_path` 指向不存在的标题 → 新建；**上级不存在会一起建出来**（`ensureAncestors()`，新建的那几级正文为空、共用这一次的时间戳）。缺的是哪几级只由 `path` 决定，所以不报错让模型一级一级重试——那样要三次调用、三次拼写同一串标题，中间一次失败还会留下半棵树。改名与删除不走这条路，上级不在照旧报错：那是在动一份本该存在的东西。
+- `edits` 数组 → 一次调用改多个标题，按数组顺序逐条 `applyEdit` 到同一个副本，最后只 `store.write()` 一次（`applyEdits()`）。后一条看得到前一条刚建的标题。**整批原子**：任一条抛错就整批不落盘，错误前面加 `edits 第 N 条没有应用，这一批都没有写入`。只能改同一份文件（`scope` / `file_name` 在顶层），日志的一批只能同一天，且每条都必须两级。单条形态与 `edits` 互斥，`assertArgs()` 不做参数间检查，`editTool.run` 里自己判。
 - 只有 `new_string` → 追加到正文末尾；`old_string` + `new_string` → 正文里唯一匹配替换。
 - `new_string` 为空串 → 删除该标题及整棵子树。
 - `old_string` 是标题行（`## 旧标题`）→ 改名，`#` 个数必须等于层级，子标题保留。
