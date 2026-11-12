@@ -104,6 +104,7 @@ try {
     assert.ok(Array.isArray(body.fields), '面板靠字段表渲染，GET 必须带上')
     const keys = body.fields.map((field) => field.key)
     assert.ok(keys.includes('injectLog') && keys.includes('fileOrder'), '每个配置项都要出现')
+    assert.ok(keys.includes('logBodyMaxChars'), '正文上限也要出现在字段表里')
     assert.equal(
       body.fields.find((field) => field.key === 'fileOrder').hidden,
       true,
@@ -202,6 +203,20 @@ try {
     assert.equal(status, 400)
     assert.match(body.error, /日志摘要字数上限/)
     assert.equal(await readFile(file, 'utf8'), before)
+  })
+
+  await check('POST 正文上限：存得下，也拦得住越界', async () => {
+    const runtime = runtimeStub(260)
+    const handler = createSettingsHandler({ file, runtime })
+    const { status, body } = await call(handler, 'POST', JSON.stringify({ logBodyMaxChars: 150 }))
+    assert.equal(status, 200)
+    assert.equal(body.settings.logBodyMaxChars, 150)
+    assert.equal(runtime.config.logBodyMaxChars, 150)
+    assert.match(await readFile(file, 'utf8'), /^logBodyMaxChars: 150$/m)
+
+    const bad = await call(handler, 'POST', JSON.stringify({ logBodyMaxChars: 0 }))
+    assert.equal(bad.status, 400)
+    assert.match(bad.body.error, /日志正文字数上限/)
   })
 
   await check('POST 非整数：400', async () => {

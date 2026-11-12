@@ -214,27 +214,31 @@ await check('写着日期那一级的路径也照样认', () => {
   )
 })
 
-await check('没有 old_string 时是追加，摘要上限只管标题', () => {
+await check('没有 old_string 时是追加，摘要和正文各有上限', () => {
   const log = logOf()
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '第一段' }, 'T')
   applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '第二段' }, 'T')
   assert.equal(logEntries(log)[0][1].desc, '第一段\n\n第二段')
 
-  // 正文长度不限，摘要有上限。
-  applyEdit(log, { path: ['2026-10-27', '12:36 长正文'], newString: '长'.repeat(400) }, 'T', { summaryMaxChars: 200 })
+  // 摘要和正文各有上限，两者都拦得住超长。
+  applyEdit(log, { path: ['2026-10-27', '12:36 长正文'], newString: '长'.repeat(400) }, 'T', { summaryMaxChars: 200, bodyMaxChars: 400 })
   assert.throws(
-    () => applyEdit(log, { path: ['2026-10-27', `12:37 ${'长'.repeat(400)}`], newString: '正文' }, 'T', { summaryMaxChars: 200 }),
+    () => applyEdit(log, { path: ['2026-10-27', `12:37 ${'长'.repeat(400)}`], newString: '正文' }, 'T', { summaryMaxChars: 200, bodyMaxChars: 400 }),
     /日志摘要最多 200 字/,
+  )
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:38 短摘要'], newString: '长'.repeat(201) }, 'T', { summaryMaxChars: 200, bodyMaxChars: 200 }),
+    /日志正文最多 200 字/,
   )
 })
 
 await check('上限调低后，超长的旧摘要仍然改得动', () => {
   const log = logOf()
-  // 先按旧上限（200）写一条 68 字的条目，再把上限当成 60 来改它：摘要没被改，
+  // 先按宽松上限（200）写一条 68 字的条目，再把上限当成 60 来改它：摘要没被改，
   // 就不该拦。以前这里校验的是路径里的原标题，改关键词、改正文全被挡回去。
   const summary = '长'.repeat(68)
   const title = `12:35 ${summary}`
-  applyEdit(log, { path: ['2026-10-27', title], newString: '第一段' }, 'T')
+  applyEdit(log, { path: ['2026-10-27', title], newString: '第一段' }, 'T', { summaryMaxChars: 200 })
   assert.equal(parseLogEntryTitle(title).summary, summary)
 
   applyEdit(log, { path: ['2026-10-27', title], newString: '第二段' }, 'T', { summaryMaxChars: 60 })
@@ -247,6 +251,29 @@ await check('上限调低后，超长的旧摘要仍然改得动', () => {
   assert.throws(
     () => applyEdit(log, { path: ['2026-10-27', `12:40 ${summary}`], newString: '正文' }, 'T', { summaryMaxChars: 60 }),
     /日志摘要最多 60 字/,
+  )
+})
+
+await check('正文上限只拦正在改长的正文，超长的旧正文仍能改短', () => {
+  const log = logOf()
+  const long = '长'.repeat(300)
+  // 用宽松上限先写一条正文超长的旧条目。
+  applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: long }, 'T', { bodyMaxChars: 400 })
+
+  // 收紧上限后，把正文改短：允许。
+  applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], oldString: long, newString: '短' }, 'T', { bodyMaxChars: 200 })
+  assert.equal(logEntries(log)[0][1].desc, '短')
+
+  // 追加把它写长：拒绝。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:35 吃了面'], newString: '长'.repeat(300) }, 'T', { bodyMaxChars: 200 }),
+    /日志正文最多 200 字/,
+  )
+
+  // 写一条新条目时超长：拒绝。
+  assert.throws(
+    () => applyEdit(log, { path: ['2026-10-27', '12:40 新条目'], newString: '长'.repeat(201) }, 'T', { bodyMaxChars: 200 }),
+    /日志正文最多 200 字/,
   )
 })
 
@@ -458,9 +485,10 @@ await check('日志放在 log/ 里，不混进文件清单', async () => {
 })
 
 await check('工具描述告诉模型怎么写日志', () => {
-  const edit = logRules(200)
+  const edit = logRules(60, 200)
   assert.match(edit, /yyyy-mm-dd > ## hh:mm/)
-  assert.match(edit, /200/)
+  assert.match(edit, /摘要最多 60 字/)
+  assert.match(edit, /正文最多 200 字/)
   assert.match(edit, /一级是当天日期/)
   assert.match(edit, /改二级条目的时分或摘要用改名/)
   assert.match(edit, /全局日志只记和他之间的互动/, '工具描述里写明两份日志的分工')

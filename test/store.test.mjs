@@ -410,6 +410,58 @@ await check('面板删除日志条目：二级能删，当天日期那一级不�
   )
 })
 
+await check('面板改日志正文：也守正文上限，不能拿面板绕过去', async () => {
+  const { store, workspace } = await sandbox()
+  const entry = (desc) => ({ update_at: '2026-01-01T00:00:00.000Z', desc, keyword: [], children: new Map() })
+  await store.write(store.globalDir, 'Global', {
+    fileName: '2026-01-02',
+    desc: '',
+    scope: 'Global',
+    kind: 'log',
+    roots: new Map([
+      ['2026-01-02', {
+        update_at: '2026-01-01T00:00:00.000Z',
+        desc: '',
+        keyword: [],
+        children: new Map([['09:00 早', entry('吃了面')]]),
+      }],
+    ]),
+    source: '',
+  })
+  const runtime = runtimeFor(store, workspace, { logBodyMaxChars: 10, logSummaryMaxChars: 10 })
+
+  // 超长的正文被拒：面板不是绕过上限的口子。
+  await assert.rejects(
+    () => runtime.patchFile({
+      scope: 'Global',
+      kind: 'log',
+      fileName: '2026-01-02',
+      nodes: [{ path: ['2026-01-02', '09:00 早'], desc: '长'.repeat(20) }],
+    }),
+    /日志正文最多 10 字/,
+  )
+
+  // 短的在上限里就写得进去。
+  const body = await runtime.patchFile({
+    scope: 'Global',
+    kind: 'log',
+    fileName: '2026-01-02',
+    nodes: [{ path: ['2026-01-02', '09:00 早'], desc: '吃了面' }],
+  })
+  assert.equal(body.tree[0].children[0].desc, '吃了面')
+
+  // 改标题就是改摘要：摘要上限同样守着。
+  await assert.rejects(
+    () => runtime.patchFile({
+      scope: 'Global',
+      kind: 'log',
+      fileName: '2026-01-02',
+      nodes: [{ path: ['2026-01-02', '09:00 早'], title: `09:00 ${'长'.repeat(20)}` }],
+    }),
+    /日志摘要最多 10 字/,
+  )
+})
+
 await check('目录里出现坏文件时不参与组装且能报错', async () => {
   const { store } = await sandbox()
   await writeFile(join(store.globalDir, 'broken.yaml'), 'meta_data:\n  file_name: 坏的\ndata:\n  desc: 不行\n', 'utf8')

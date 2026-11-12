@@ -63,7 +63,7 @@ node test/dump.mjs
 | `lib/notice.js` | 比对结果 → 通知文案（空列表返回 `undefined`） | `NOTICE_SOURCE_KIND` `renderNotice` `renderBrokenNotice` |
 | `lib/render.js` | 文档 → 文本（注入、读取、日志、文件清单、format 段） | `renderInjection` `renderRead` `renderLog` `renderLogRange` `renderFileList` `renderFormats` |
 | `lib/edit.js` | 一次编辑请求的全部语义 | `applyEdit` `applyEdits` `parseHeadingLine` |
-| `lib/log.js` | 日志形状、日期与时间查询、固定规则文案 | `LOG_DIR_NAME` `LOG_MAX_DEPTH` `DEFAULT_SUMMARY_MAX_CHARS` `LOG_DESCS` `logRules` `logReadRules` 等 |
+| `lib/log.js` | 日志形状、日期与时间查询、固定规则文案 | `LOG_DIR_NAME` `LOG_MAX_DEPTH` `DEFAULT_SUMMARY_MAX_CHARS` `DEFAULT_BODY_MAX_CHARS` `LOG_DESCS` `logRules` `logReadRules` 等 |
 | `lib/document.js` | YAML ↔ 文档对象 | `parseDocument` `serializeDocument` |
 | `lib/model.js` | 常量、字段校验、节点与文档构造 | `MAX_DEPTH` `RESERVED_KEYS` `INJECT_IGNORE_OPTIONS` `INJECT_IGNORE_LEVELS` `SCOPES` `createNode` `createDocument` `cloneDocument` `normalizeScope` `normalizeKind` 等 |
 | `lib/tree.js` | 标题树查找与改写 | `walk` `findNode` `findSiblings` `touchPath` `renameHeading` `reorderHeadings` |
@@ -168,11 +168,12 @@ node test/dump.mjs
 
 ## 8. 日志
 
-一天一个文件，`log/<yyyy-mm-dd>.yaml`，最多 2 级（`LOG_MAX_DEPTH`）。一级标题固定是当天日期（= `file_name`），二级是 `HH:MM 摘要`，条目的 `desc` 就是不限长度的细节。摘要写在标题里，是为了"一次 `memory_edit` 记完一件事"，不用先写摘要再寻址到 `detail`。
+一天一个文件，`log/<yyyy-mm-dd>.yaml`，最多 2 级（`LOG_MAX_DEPTH`）。一级标题固定是当天日期（= `file_name`），二级是 `HH:MM 摘要`，条目的 `desc` 是细节（有字数上限）。摘要写在标题里，是为了"一次 `memory_edit` 记完一件事"，不用先写摘要再寻址到 `detail`。
 
 - `meta_data` 只有 `file_name` 和按 `scope` 写死的 `desc`（`LOG_DESCS`）；多一个键就解析失败。
 - **两份日志分工写进 `logRules()`**：全局只记和他之间的互动（聊过的话、一起做过的事、他的反应），项目操作（代码、命令、调试、决定）写工作区那份，哪怕是一起做的。`desc` 里也带一句「不记项目操作」，注入时模型看得到。这条是用户明确要求的：模型老把项目记忆塞进全局日志。
 - 摘要长度（`logSummaryMaxChars`）**只在新建条目、或改名换掉摘要时校验**。已存在条目的编辑只动正文和关键词，路径里的那份摘要没被改，就不该拦；改名只换时分更不该拦——早期把校验放在两个分支之外，导致"上限调低后老条目连关键词都改不了"。
+- **正文也有上限**（`logBodyMaxChars`，默认 200），规则与摘要一致但多两条：没给上限就是没有上限（记忆文件的正文不受管），已经超长的旧正文**改短或改成同样长度仍然允许**，只有把它写更长才被拒（`assertBodyLength(text, maxChars, currentLength)`）。面板改日志正文走的是另一条路（`panel-service.js` 的 `patchFile`），那里也得用同一条判断，不然面板就成了绕过上限的口子；面板改日志条目标题等于改摘要，同样要过摘要上限。
 - 写：`heading_path` 必须写全 `# 2026-10-27 > ## 12:35 摘要`，少一层多一层都报错；条目按时间插入；只能写当天。
 - 删：条目能整条删（`new_string` 传空串，`heading_path` 指到那条），走 `removeLogEntry()`；**一级标题删不了**——它就是当天的日期。`normalizeLogPath()` 固定要求两级，所以日期那一级永远进不了删除分支。要删掉一整天就删那份文件（`memory_manage` 传空 `new_file_name`，或面板左栏的 `remove`）：当天那份被删掉等于**清空这一天**，`ensureTodayLog()` / `logTarget()` 会在下次 `attach()` 或下次写入时把它补回空文件。
 - 改名：二级条目可以改标题（`old_string` = `## 12:35 旧摘要`，`new_string` = `## 09:10 新摘要`），由 `renameLogEntry()` 处理，改名后 `sortLogEntries()` 重排；**一级标题永不改名**——它就是 `file_name`，改了文档就和文件名对不上。这个分支在 `assertPlainLog()` **之前**，所以"两边都写成标题行"是合法改名，只有剩下的以 `#` 开头的 `new_string` 才算往正文里塞标题。
@@ -249,7 +250,7 @@ GET  …&scope=Global&file=<名>&kind=log
      → 上面那份 + { file: { fileName, scope, kind, source, text, injected, meta, tree } }
 GET  …&preset=<名>
      → 上面那份 + { preset: { name, text } }
-POST …                    ← { logSummaryMaxChars: 400 }           改配置
+POST …                    ← { logSummaryMaxChars: 400, logBodyMaxChars: 200 }   改配置
 POST …?session=<id>       ← { file: { scope, fileName, kind, newFileName?, desc?, format?, injectIgnore?, nodes, newNodes?, removed?, order? } }
 POST …?session=<id>       ← { create: { scope, kind, fileName } }
 POST …?session=<id>       ← { remove: { scope, kind, fileName } }
