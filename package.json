@@ -1,6 +1,6 @@
 {
   "name": "@huai_xin/dsh-memory",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Cross-session long-term memory, per-session presets and periodic reminders for DeepSeek-Harness: YAML memory notebooks injected into the prompt, read and edited by the model, kept in sync across sessions, plus Markdown presets that replace the harness identity and a reminder appended alongside the user's own message every N turns.",
   "license": "MIT",
   "type": "module",

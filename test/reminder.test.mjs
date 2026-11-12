@@ -122,18 +122,16 @@ await check('提示是一条独立消息，插在最后一条用户消息后面'
   assert.deepEqual(withReminder([pluginMessage('p1')], reminder).map((message) => message.id), ['p1', 'reminder'])
 })
 
-await check('提示正文带标签，并说明它不是新的请求', async () => {
-  const text = renderReminder('记得写日志', 6)
-  assert.match(text, /^<memory_reminder>\n/)
-  assert.match(text, /第 6 轮/)
-  assert.match(text, /不是新的请求/)
-  assert.match(text, /记得写日志/)
-  assert.match(text, /<\/memory_reminder>$/)
+await check('提示正文只有用户自己写的那段话', async () => {
+  const text = renderReminder('记得写日志')
+  assert.equal(text, '<memory_reminder>\n记得写日志\n</memory_reminder>')
+  assert.equal(text.includes('轮'), false, '不夹带轮数')
+  assert.equal(text.includes('不是新的请求'), false, '不夹带插件自己的说明')
 
   const message = reminderMessage({ text: '记得写日志', turns: 6, id: 'fixed' })
   assert.equal(message.id, 'fixed')
   assert.equal(message.source.form, 'notice')
-  assert.equal(message.source.summary, '第 6 轮提示')
+  assert.equal(message.source.summary, '第 6 轮提示', '轮数留在消息摘要里')
   assert.equal(message.content[0].text.includes('记得写日志'), true)
 })
 
@@ -148,7 +146,7 @@ await check('runtime：到点才注入，计数按会话存在 state 里', async
   const second = await runtime.reminderStep(agent, step(userMessage('u2')))
   assert.deepEqual(second.messages.map((message) => message.source.kind), ['user', 'plugin:dsh-memory'])
   assert.match(second.messages[1].content[0].text, /记得写日志/)
-  assert.match(second.messages[1].content[0].text, /第 2 轮/)
+  assert.equal(second.messages[1].source.summary, '第 2 轮提示')
 
   const third = await runtime.reminderStep(agent, step(userMessage('u3')))
   assert.equal(third.messages.length, 1)
@@ -180,7 +178,7 @@ await check('runtime：一步里两条用户消息，也只按跨过的倍数注
   const burst = await runtime.reminderStep(agent, step(userMessage('u2'), userMessage('u3')))
   assert.equal(burst.messages.length, 3, '两条用户消息 + 一条提示')
   assert.equal(burst.messages[2].source.kind, 'plugin:dsh-memory')
-  assert.match(burst.messages[2].content[0].text, /第 3 轮/)
+  assert.equal(burst.messages[2].source.summary, '第 3 轮提示')
 
   store.dispose()
   await rm(home, { recursive: true, force: true })

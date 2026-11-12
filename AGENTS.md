@@ -323,7 +323,7 @@ POST …?session=<id>       ← { preset: { op: 'select'|'create'|'save'|'remove
 - **唯一挂点**：`index.js` 的 `agent/pre-step` 瀑布（`ctx.on('agent/pre-step', async (payload, next) => { const decision = await next(); … })`）。这是宿主要提交的消息已经定下、又还什么都没提交的那一刻，所以能在用户消息后追加一条。**别改用 `agent/inject` 或 `system-prompt/*`**：前者是塞收件箱（不跟着这一轮走），后者动前缀。
 - **不改 decision 的形状**：要么原样 `return decision`（同一个对象），要么 `return { ...decision, messages }`，`messages` 必须是新数组——`withReminder()` 返回副本，不动入参。
 - 消息形状（`reminderMessage()`，跟 dsh-im 的 `contextMessage()` 同款）：`{ id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'plugin:dsh-memory', form: 'notice', summary: '第 N 轮提示' } }`。`source.kind` 带 `plugin:` 前缀，**不要**另写一个 `source.plugin` 字段。`summary` 是这条插件消息的摘要，措辞别乱改。
-- 正文带 `<memory_reminder>` 标签，里面写明「第 N 轮。这是用户提前设置好的提示，不是新的请求。」——模型得知道这不是用户刚说的话。模板只有 `renderReminder()` 一处。
+- 正文带 `<memory_reminder>` 标签，**标签里只有用户自己写的那段话**，插件不夹带任何说明文字——标签本身就是「这不是用户刚说的话」的标记。轮数只留在 `source.summary`（「第 N 轮提示」）里，那是给人看对话记录的。模板只有 `renderReminder()` 一处，它只收 `text` 一个参数。
 - **轮数按用户自己发的消息数算**（只认 `source.kind === 'user'`）：插件消息、定时任务消息、`memory` 通知都不算轮，模型的多步工具调用更不算。子 agent 直接跳过（`isSubagentAgent()`），不计数也不注入。
 - **计数按会话存在 `state/reminder/<sessionId>.json`**（`{version: 1, turns}`），重启接着数，不是从头来。内存里那张 `this.reminderTurns` 表是这一轮的权威：磁盘读失败不能让同一个会话每轮都触发一次；写失败只 warning（`writeReminderTurns(...).catch(warn)`）。
 - 到期判定是 `reminderDue(previous, turns, every)`：`floor(turns/every) > floor(previous/every)`——一步里跨过第 3 轮也发一次，同一轮里不重复发。
